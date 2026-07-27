@@ -114,6 +114,7 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
 ];
 
 export default function ArbitrageCommandCenter() {
+  const [mounted, setMounted] = useState<boolean>(false);
   const [items, setItems] = useState<ArbitrageItem[]>(FALLBACK_DUMMY_DATA);
   const [loading, setLoading] = useState<boolean>(true);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(false);
@@ -126,6 +127,11 @@ export default function ArbitrageCommandCenter() {
   const [sortAsc, setSortAsc] = useState<boolean>(false);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Prevent hydration mismatch between SSR and client
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Fetch real eBay listings photos & details from Supabase
   const fetchSupabaseListings = useCallback(async () => {
@@ -193,29 +199,38 @@ export default function ArbitrageCommandCenter() {
   }, []);
 
   useEffect(() => {
-    fetchSupabaseListings();
-  }, [fetchSupabaseListings]);
+    if (mounted) {
+      fetchSupabaseListings();
+    }
+  }, [mounted, fetchSupabaseListings]);
 
-  // Pre-fetching eBay URLs and images
+  // Pre-fetching eBay URLs and images on client
   useEffect(() => {
+    if (!mounted || typeof window === "undefined") return;
     items.forEach((item) => {
       if (item.status === "pending") {
-        const link = document.createElement("link");
-        link.rel = "prefetch";
-        link.href = item.ebay_url;
-        document.head.appendChild(link);
+        try {
+          const link = document.createElement("link");
+          link.rel = "prefetch";
+          link.href = item.ebay_url;
+          document.head.appendChild(link);
 
-        item.image_urls.forEach((url) => {
-          const img = new Image();
-          img.src = url;
-        });
+          item.image_urls.forEach((url) => {
+            const img = new Image();
+            img.src = url;
+          });
+        } catch (e) {
+          // ignore DOM prefetch errors in sandbox
+        }
       }
     });
-  }, [items]);
+  }, [mounted, items]);
 
   // Action: Worthy (Purchased + open link + auto-advance)
   const handleWorthy = useCallback((item: ArbitrageItem) => {
-    window.open(item.ebay_url, "_blank", "noopener,noreferrer");
+    if (typeof window !== "undefined") {
+      window.open(item.ebay_url, "_blank", "noopener,noreferrer");
+    }
     setItems((prev) =>
       prev.map((i) => (i.id === item.id ? { ...i, status: "purchased" } : i))
     );
@@ -230,7 +245,7 @@ export default function ArbitrageCommandCenter() {
 
   // Global WASD Keyboard Listener
   useEffect(() => {
-    if (mode !== "triage" || !hoveredCardId) return;
+    if (!mounted || mode !== "triage" || !hoveredCardId) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeItem = items.find(
@@ -249,7 +264,7 @@ export default function ArbitrageCommandCenter() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [mode, hoveredCardId, items, handleWorthy, handleUnworthy]);
+  }, [mounted, mode, hoveredCardId, items, handleWorthy, handleUnworthy]);
 
   // Active Pending items for Triage Grid
   const pendingItems = useMemo(
@@ -316,8 +331,24 @@ export default function ArbitrageCommandCenter() {
     );
   }, [pendingItems]);
 
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] text-[#111111] font-sans antialiased flex items-center justify-center">
+        <div className="text-center space-y-3 font-mono">
+          <Camera className="w-8 h-8 text-[#111111] animate-bounce mx-auto" />
+          <p className="text-xs uppercase tracking-widest text-[#666666]">
+            Initializing Arbitrage Feed...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#faf9f6] text-[#111111] font-sans antialiased selection:bg-[#111111] selection:text-white">
+    <div
+      suppressHydrationWarning
+      className="min-h-screen bg-[#faf9f6] text-[#111111] font-sans antialiased selection:bg-[#111111] selection:text-white"
+    >
       {/* Apple-Sleek Egg-White Header with Sharp Corners */}
       <header className="sticky top-0 z-40 bg-[#faf9f6]/90 border-b border-[#e5e2d9] shadow-sm backdrop-blur-md px-8 py-5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
@@ -494,7 +525,7 @@ export default function ArbitrageCommandCenter() {
               </div>
             </div>
 
-            {/* Bulk Floating Action Bar - Sharp Egg-White / Obsidian Contrast */}
+            {/* Bulk Floating Action Bar */}
             {selectedIds.length > 0 && (
               <div className="sticky top-24 z-30 bg-[#111111] text-white border border-[#333333] rounded-none p-4 shadow-xl flex items-center justify-between animate-in fade-in duration-200 font-mono text-xs">
                 <div className="flex items-center space-x-3">
