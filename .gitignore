@@ -17,6 +17,13 @@ venv/
 env/
 ENV/
 
+# Node & Next.js Build Artifacts
+node_modules/
+.next/
+out/
+build/
+.vercel
+
 # Agent Scratch & Temporary Logs
 .agents/
 
