@@ -1,14 +1,15 @@
 """
 Main Orchestrator Script for Y2K Camera Arbitrage Bot
+Dual-Track Pipeline & Non-Blocking Dual-Frequency Scheduler (Requirement R6)
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import signal
 import sys
 import time
-from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
@@ -16,7 +17,7 @@ from dotenv import load_dotenv
 
 from modules.database import check_existing_urls, save_listings
 from modules.pricer import price_camera_listings
-from modules.scraper import scrape_ebay_listings
+from modules.scraper import EXACT_SEARCH_QUERIES, GENERIC_SEARCH_QUERIES, scrape_ebay_listings
 from modules.vision_ai import identify_camera_listings
 
 # Load environment variables at script execution
@@ -30,13 +31,15 @@ def handle_shutdown_signal(signum: int, frame: Any) -> None:
     """Handles SIGINT and SIGTERM for graceful scheduler termination."""
     global SHUTDOWN_REQUESTED
     SHUTDOWN_REQUESTED = True
-    logging.getLogger("y2k_bot").info("[SCHEDULER] Shutdown signal received (signum=%s). Exiting gracefully...", signum)
+    logging.getLogger("y2k_bot").info(
+        "[SCHEDULER] Shutdown signal received (signum=%s). Exiting gracefully...", signum
+    )
 
 
 def setup_logging(log_file: str = "logs/bot.log", level: int = logging.INFO) -> logging.Logger:
     """
     Configures and returns the 'y2k_bot' logger with stdout StreamHandler and RotatingFileHandler.
-    Creates directory for log_file before creating handlers to prevent FileNotFoundError.
+    Creates directory for log_file BEFORE initializing RotatingFileHandler to prevent FileNotFoundError.
     """
     log_dir = os.path.dirname(log_file)
     if log_dir:
@@ -68,7 +71,7 @@ def setup_logging(log_file: str = "logs/bot.log", level: int = logging.INFO) -> 
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-        logger.propagate = True
+        logger.propagate = False
 
     return logger
 
@@ -77,85 +80,19 @@ def setup_logging(log_file: str = "logs/bot.log", level: int = logging.INFO) -> 
 logger = setup_logging()
 
 
-def get_eastern_now() -> datetime:
-    """Returns current datetime in US Eastern Time."""
-    try:
-        import zoneinfo
-        return datetime.now(zoneinfo.ZoneInfo("America/New_York"))
-    except Exception:
-        return datetime.now(timezone(timedelta(hours=-5)))
-
-
-def is_peak_hour(dt: datetime | None = None) -> bool:
+def run_generic_pipeline() -> dict[str, Any]:
     """
-    Returns True if the specified or current US Eastern time falls within peak hours.
-    Reads PEAK_START_HOUR (default 8) and PEAK_END_HOUR (default 23) from env vars.
+    Executes Generic Search Pipeline:
+    Stage 1: [SCRAPER] Ingest generic listings using GENERIC_SEARCH_QUERIES
+    Stage 2: [DATABASE] Early URL deduplication against Supabase
+    Stage 3: [VISION] Route through Vision AI (gemini) for model & damage assessment
+    Stage 4: [PRICER] Price non-major listings using MIN_PROFIT_MARGIN (40%)
+    Stage 5: [DATABASE] Merge dataset and persist to Supabase
     """
-    try:
-        peak_start = int(os.getenv("PEAK_START_HOUR", "8"))
-    except ValueError:
-        peak_start = 8
-
-    try:
-        peak_end = int(os.getenv("PEAK_END_HOUR", "23"))
-    except ValueError:
-        peak_end = 23
-
-    if dt is None:
-        dt = get_eastern_now()
-
-    hour = dt.hour
-    if peak_start <= peak_end:
-        return peak_start <= hour <= peak_end
-    else:
-        return hour >= peak_start or hour <= peak_end
-
-
-def calculate_seconds_until_peak(now_et: datetime, peak_start: int) -> float:
-    """Calculates sleep duration in seconds until next PEAK_START_HOUR ET."""
-    target_dt = datetime(
-        year=now_et.year,
-        month=now_et.month,
-        day=now_et.day,
-        hour=peak_start,
-        minute=0,
-        second=0,
-        microsecond=0,
-        tzinfo=now_et.tzinfo
-    )
-    if now_et >= target_dt:
-        target_dt += timedelta(days=1)
-    return max(1.0, (target_dt - now_et).total_seconds())
-
-
-def interruptible_sleep(seconds: float) -> bool:
-    """
-    Sleeps in 1-second increments, monitoring SHUTDOWN_REQUESTED.
-    Returns True if interrupted by shutdown signal, False otherwise.
-    """
-    global SHUTDOWN_REQUESTED
-    elapsed = 0.0
-    while elapsed < seconds:
-        if SHUTDOWN_REQUESTED:
-            return True
-        sleep_chunk = min(1.0, seconds - elapsed)
-        time.sleep(sleep_chunk)
-        elapsed += sleep_chunk
-    return False
-
-
-def run_pipeline() -> dict[str, Any]:
-    """
-    Executes a single end-to-end pipeline run:
-    Stage 1: [SCRAPER] Scrape eBay listings
-    Stage 2: [DATABASE] Early deduplication (filter out existing URLs before Vision AI)
-    Stage 3: [VISION] Vision AI camera model identification & major damage filtering
-    Stage 4: [PRICER] Market comp pricing and profit margin calculation
-    Stage 5: [DATABASE] Merge priced listings into enriched dataset and persist to Supabase
-    """
-    logger.info("=== Starting Pipeline Run ===")
-    summary = {
+    logger.info("=== [SCHEDULER] Starting Generic Pipeline Run ===")
+    summary: dict[str, Any] = {
         "status": "success",
+        "search_type": "generic",
         "scraped": 0,
         "new_items": 0,
         "processed": 0,
@@ -163,25 +100,25 @@ def run_pipeline() -> dict[str, Any]:
         "profitable": 0,
         "inserted": 0,
         "skipped": 0,
-        "failed": 0
+        "failed": 0,
     }
 
     # Stage 1: [SCRAPER]
     scraped_listings: list[dict[str, Any]] = []
     try:
-        logger.info("[SCRAPER] Ingesting listings from eBay Browse API...")
-        scraped_listings = scrape_ebay_listings()
+        logger.info("[SCRAPER] Ingesting generic listings from eBay Browse API...")
+        scraped_listings = scrape_ebay_listings(queries=GENERIC_SEARCH_QUERIES, search_type="generic")
         scraped_count = len(scraped_listings) if scraped_listings else 0
         summary["scraped"] = scraped_count
-        logger.info("[SCRAPER] Scraped %d unique listings.", scraped_count)
+        logger.info("[SCRAPER] Scraped %d generic listings.", scraped_count)
     except Exception as exc:
-        logger.error("[SCRAPER] Failed during scraping stage: %s", exc, exc_info=True)
+        logger.error("[SCRAPER] Failed during generic scraping stage: %s", exc, exc_info=True)
         summary["status"] = "error"
         summary["error"] = f"[SCRAPER] {exc}"
         return summary
 
     if not scraped_listings:
-        logger.warning("[SCRAPER] No listings scraped. Ending pipeline run early.")
+        logger.warning("[SCRAPER] No generic listings scraped. Ending pipeline run early.")
         return summary
 
     # Stage 2: [DATABASE] Early Deduplication
@@ -190,14 +127,17 @@ def run_pipeline() -> dict[str, Any]:
         logger.info("[DATABASE] Performing early URL deduplication check against Supabase...")
         urls = [item["url"] for item in scraped_listings if isinstance(item, dict) and item.get("url")]
         existing_urls = check_existing_urls(urls)
-        new_items = [item for item in scraped_listings if isinstance(item, dict) and item.get("url") not in existing_urls]
+        new_items = [
+            item for item in scraped_listings if isinstance(item, dict) and item.get("url") not in existing_urls
+        ]
         skipped_count = len(scraped_listings) - len(new_items)
         summary["new_items"] = len(new_items)
+        summary["skipped"] = skipped_count
         logger.info(
-            "[DATABASE] Checked %d scraped URLs. Found %d existing (skipped). %d new listings remaining for processing.",
+            "[DATABASE] Checked %d scraped URLs. Found %d existing (skipped). %d new generic listings remaining.",
             len(urls),
             skipped_count,
-            len(new_items)
+            len(new_items),
         )
     except Exception as exc:
         logger.error("[DATABASE] Failed during deduplication check: %s", exc, exc_info=True)
@@ -205,7 +145,7 @@ def run_pipeline() -> dict[str, Any]:
         summary["new_items"] = len(new_items)
 
     if not new_items:
-        logger.info("[DATABASE] No new listings to process after deduplication. Pipeline run complete.")
+        logger.info("[DATABASE] No new generic listings to process after deduplication.")
         return summary
 
     # Stage 3: [VISION] Vision AI identification
@@ -220,7 +160,7 @@ def run_pipeline() -> dict[str, Any]:
             "[VISION] Identified models for %d listings. Major damage (filtered out): %d, Minor/No damage (sent to pricer): %d.",
             len(all_enriched),
             major_damage_count,
-            len(filtered_for_pricer)
+            len(filtered_for_pricer),
         )
     except Exception as exc:
         logger.error("[VISION] Failed during Vision AI stage: %s", exc, exc_info=True)
@@ -258,13 +198,13 @@ def run_pipeline() -> dict[str, Any]:
 
         save_res = save_listings(final_listings)
         summary["inserted"] = save_res.get("inserted", 0)
-        summary["skipped"] = save_res.get("skipped", 0)
+        summary["skipped"] = summary["skipped"] + save_res.get("skipped", 0)
         summary["failed"] = save_res.get("failed", 0)
         logger.info(
             "[DATABASE] Persistence complete -> Inserted: %d, Skipped: %d, Failed: %d",
             summary["inserted"],
             summary["skipped"],
-            summary["failed"]
+            summary["failed"],
         )
     except Exception as exc:
         logger.error("[DATABASE] Failed during save_listings stage: %s", exc, exc_info=True)
@@ -272,15 +212,155 @@ def run_pipeline() -> dict[str, Any]:
         summary["error"] = f"[DATABASE] {exc}"
         return summary
 
-    logger.info("=== Pipeline Run Completed Successfully ===")
+    logger.info("=== [SCHEDULER] Generic Pipeline Run Completed Successfully ===")
     return summary
 
 
-def run_scheduler(once: bool = False) -> dict[str, Any] | None:
+def run_exact_pipeline() -> dict[str, Any]:
     """
-    Scheduler loop. Runs pipeline periodically during peak hours (PEAK_START_HOUR to PEAK_END_HOUR ET),
-    and sleeps outside peak hours until peak start time.
-    If once=True, executes run_pipeline() once immediately and returns the summary dict.
+    Executes Exact Search Pipeline:
+    Stage 1: [SCRAPER] Ingest exact model listings using EXACT_SEARCH_QUERIES
+    Stage 2: [DATABASE] Early URL deduplication against Supabase
+    Stage 3: [ROUTING CONDITIONAL] SKIP vision_ai.py entirely! Route directly to pricer.
+    Stage 4: [PRICER] Price listings directly using EXACT_MATCH_MARGIN (25%)
+    Stage 5: [DATABASE] Persist priced exact listings to Supabase
+    """
+    logger.info("=== [SCHEDULER] Starting Exact Pipeline Run ===")
+    summary: dict[str, Any] = {
+        "status": "success",
+        "search_type": "exact",
+        "scraped": 0,
+        "new_items": 0,
+        "processed": 0,
+        "priced": 0,
+        "profitable": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+
+    # Stage 1: [SCRAPER]
+    scraped_listings: list[dict[str, Any]] = []
+    try:
+        logger.info("[SCRAPER] Ingesting exact model listings from eBay Browse API...")
+        scraped_listings = scrape_ebay_listings(queries=EXACT_SEARCH_QUERIES, search_type="exact")
+        scraped_count = len(scraped_listings) if scraped_listings else 0
+        summary["scraped"] = scraped_count
+        logger.info("[SCRAPER] Scraped %d exact model listings.", scraped_count)
+    except Exception as exc:
+        logger.error("[SCRAPER] Failed during exact scraping stage: %s", exc, exc_info=True)
+        summary["status"] = "error"
+        summary["error"] = f"[SCRAPER] {exc}"
+        return summary
+
+    if not scraped_listings:
+        logger.warning("[SCRAPER] No exact listings scraped. Ending exact pipeline run early.")
+        return summary
+
+    # Stage 2: [DATABASE] Early Deduplication
+    new_items: list[dict[str, Any]] = []
+    try:
+        logger.info("[DATABASE] Performing early URL deduplication check against Supabase...")
+        urls = [item["url"] for item in scraped_listings if isinstance(item, dict) and item.get("url")]
+        existing_urls = check_existing_urls(urls)
+        new_items = [
+            item for item in scraped_listings if isinstance(item, dict) and item.get("url") not in existing_urls
+        ]
+        skipped_count = len(scraped_listings) - len(new_items)
+        summary["new_items"] = len(new_items)
+        summary["skipped"] = skipped_count
+        logger.info(
+            "[DATABASE] Checked %d scraped exact URLs. Found %d existing (skipped). %d new listings remaining.",
+            len(urls),
+            skipped_count,
+            len(new_items),
+        )
+    except Exception as exc:
+        logger.error("[DATABASE] Failed during deduplication check: %s", exc, exc_info=True)
+        new_items = scraped_listings
+        summary["new_items"] = len(new_items)
+
+    if not new_items:
+        logger.info("[DATABASE] No new exact listings to process after deduplication.")
+        return summary
+
+    # Stage 3 & 4: [ROUTING CONDITIONAL & PRICER] Skip Vision AI and route directly to Pricer
+    logger.info(
+        "[PRICER] [ROUTING CONDITIONAL] Skipping Vision AI module for exact match listings. Routing %d items directly to Pricer...",
+        len(new_items),
+    )
+    priced_listings: list[dict[str, Any]] = []
+    try:
+        priced_listings = price_camera_listings(new_items)
+        profitable_count = sum(
+            1 for item in priced_listings if isinstance(item, dict) and item.get("is_profitable_deal") is True
+        )
+        summary["priced"] = len(priced_listings)
+        summary["profitable"] = profitable_count
+        logger.info("[PRICER] Priced %d exact listings. Flagged %d profitable deals.", len(priced_listings), profitable_count)
+    except Exception as exc:
+        logger.error("[PRICER] Failed during exact pricing stage: %s", exc, exc_info=True)
+        priced_listings = new_items
+
+    # Stage 5: [DATABASE] Persist exact listings
+    try:
+        logger.info("[DATABASE] Persisting exact listings to Supabase...")
+        save_res = save_listings(priced_listings)
+        summary["inserted"] = save_res.get("inserted", 0)
+        summary["skipped"] = summary["skipped"] + save_res.get("skipped", 0)
+        summary["failed"] = save_res.get("failed", 0)
+        logger.info(
+            "[DATABASE] Persistence complete -> Inserted: %d, Skipped: %d, Failed: %d",
+            summary["inserted"],
+            summary["skipped"],
+            summary["failed"],
+        )
+    except Exception as exc:
+        logger.error("[DATABASE] Failed during exact save_listings stage: %s", exc, exc_info=True)
+        summary["status"] = "error"
+        summary["error"] = f"[DATABASE] {exc}"
+        return summary
+
+    logger.info("=== [SCHEDULER] Exact Pipeline Run Completed Successfully ===")
+    return summary
+
+
+def run_pipeline() -> dict[str, Any]:
+    """
+    Executes sequential pipeline run of both exact and generic pipelines.
+    Used for single-run mode (--once) or end-to-end integration execution.
+    """
+    logger.info("=== Starting Unified Pipeline Run (Exact + Generic) ===")
+    exact_summary = run_exact_pipeline()
+    generic_summary = run_generic_pipeline()
+
+    combined_summary = {
+        "status": "success" if exact_summary.get("status") == "success" and generic_summary.get("status") == "success" else "error",
+        "exact": exact_summary,
+        "generic": generic_summary,
+        "scraped": exact_summary.get("scraped", 0) + generic_summary.get("scraped", 0),
+        "new_items": exact_summary.get("new_items", 0) + generic_summary.get("new_items", 0),
+        "processed": generic_summary.get("processed", 0),
+        "priced": exact_summary.get("priced", 0) + generic_summary.get("priced", 0),
+        "profitable": exact_summary.get("profitable", 0) + generic_summary.get("profitable", 0),
+        "inserted": exact_summary.get("inserted", 0) + generic_summary.get("inserted", 0),
+        "skipped": exact_summary.get("skipped", 0) + generic_summary.get("skipped", 0),
+        "failed": exact_summary.get("failed", 0) + generic_summary.get("failed", 0),
+    }
+    return combined_summary
+
+
+async def run_scheduler_async(
+    once: bool = False,
+    exact_interval: int = 10,
+    generic_interval: int = 60,
+) -> dict[str, Any] | None:
+    """
+    Asynchronous dual scheduler implementation.
+    - Exact pipeline runs every exact_interval minutes (default 10).
+    - Generic pipeline runs every generic_interval minutes (default 60).
+    - Ensures 60-minute loop does NOT block or pause the 10-minute loop.
+    - Robust error handling: exceptions in one pipeline do not crash the other.
     """
     global SHUTDOWN_REQUESTED
 
@@ -290,59 +370,83 @@ def run_scheduler(once: bool = False) -> dict[str, Any] | None:
         logger.info("[SCHEDULER] Single execution complete.")
         return summary
 
+    logger.info(
+        "[SCHEDULER] Starting non-blocking dual scheduler daemon. Exact interval: %d min, Generic interval: %d min.",
+        exact_interval,
+        generic_interval,
+    )
+
+    async def exact_loop():
+        logger.info("[SCHEDULER] Initialized Exact match loop (interval: %d min)", exact_interval)
+        while not SHUTDOWN_REQUESTED:
+            try:
+                run_exact_pipeline()
+            except Exception as exc:
+                logger.error("[SCHEDULER] Uncaught exception in exact loop: %s", exc, exc_info=True)
+
+            sleep_seconds = exact_interval * 60
+            for _ in range(sleep_seconds):
+                if SHUTDOWN_REQUESTED:
+                    break
+                await asyncio.sleep(1)
+
+    async def generic_loop():
+        logger.info("[SCHEDULER] Initialized Generic match loop (interval: %d min)", generic_interval)
+        while not SHUTDOWN_REQUESTED:
+            try:
+                run_generic_pipeline()
+            except Exception as exc:
+                logger.error("[SCHEDULER] Uncaught exception in generic loop: %s", exc, exc_info=True)
+
+            sleep_seconds = generic_interval * 60
+            for _ in range(sleep_seconds):
+                if SHUTDOWN_REQUESTED:
+                    break
+                await asyncio.sleep(1)
+
+    await asyncio.gather(exact_loop(), generic_loop())
+    logger.info("[SCHEDULER] Non-blocking scheduler loop stopped cleanly.")
+    return None
+
+
+def run_scheduler(
+    once: bool = False,
+    exact_interval: int | None = None,
+    generic_interval: int | None = None,
+) -> dict[str, Any] | None:
+    """
+    Entry point to trigger the non-blocking dual scheduler daemon or a single --once run.
+    """
+    if exact_interval is None:
+        try:
+            exact_interval = int(os.getenv("EXACT_INTERVAL_MINUTES", "10"))
+        except ValueError:
+            exact_interval = 10
+
+    if generic_interval is None:
+        try:
+            generic_interval = int(os.getenv("GENERIC_INTERVAL_MINUTES", "60"))
+        except ValueError:
+            generic_interval = 60
+
+    if once:
+        return asyncio.run(run_scheduler_async(once=True, exact_interval=exact_interval, generic_interval=generic_interval))
+
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
     try:
-        run_hours = float(os.getenv("RUN_SCHEDULE_HOURS", "2"))
-    except ValueError:
-        run_hours = 2.0
-
-    try:
-        peak_start = int(os.getenv("PEAK_START_HOUR", "8"))
-    except ValueError:
-        peak_start = 8
-
-    try:
-        peak_end = int(os.getenv("PEAK_END_HOUR", "23"))
-    except ValueError:
-        peak_end = 23
-
-    logger.info(
-        "[SCHEDULER] Starting daemon loop. Peak window: %02d:00-%02d:00 ET, Interval: %.1f hours.",
-        peak_start, peak_end, run_hours
-    )
-
-    while not SHUTDOWN_REQUESTED:
-        now_et = get_eastern_now()
-        if is_peak_hour(now_et):
-            logger.info(
-                "[SCHEDULER] Peak hours active (%02d:00 ET). Running pipeline...",
-                now_et.hour
-            )
-            run_pipeline()
-
-            sleep_sec = max(1.0, run_hours * 3600.0)
-            logger.info("[SCHEDULER] Sleeping for %.2f hours until next scheduled run...", run_hours)
-            if interruptible_sleep(sleep_sec):
-                break
-        else:
-            sleep_sec = calculate_seconds_until_peak(now_et, peak_start)
-            logger.info(
-                "[SCHEDULER] Outside peak hours (%02d:00 ET). Sleeping until peak start at %02d:00 ET (sleeping %.2f hours)...",
-                now_et.hour, peak_start, sleep_sec / 3600.0
-            )
-            if interruptible_sleep(sleep_sec):
-                break
-
-    logger.info("[SCHEDULER] Shutdown complete.")
-    return None
+        return asyncio.run(run_scheduler_async(once=False, exact_interval=exact_interval, generic_interval=generic_interval))
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("[SCHEDULER] Interrupted by signal. Shutting down daemon...")
+        return None
 
 
 def main() -> None:
     """Main CLI entry point."""
-    parser = argparse.ArgumentParser(description="Y2K Digital Camera Arbitrage Bot Orchestrator")
-    parser.add_argument("--once", action="store_true", help="Run the pipeline once and exit")
+    parser = argparse.ArgumentParser(description="eBay Y2K Camera Arbitrage Bot Orchestrator")
+    parser.add_argument("--once", "-o", action="store_true", help="Run one pass of exact and generic pipelines and exit")
+    parser.add_argument("--loop", "-l", action="store_true", help="Run non-blocking dual scheduler daemon (default)")
     args = parser.parse_args()
 
     run_scheduler(once=args.once)

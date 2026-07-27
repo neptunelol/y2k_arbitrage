@@ -210,7 +210,8 @@ class TestPricerModule(unittest.TestCase):
         self.assertEqual(pricer.price_camera_listings([]), [])
 
         # Listing with missing price key
-        results = pricer.price_camera_listings([{"title": "No price camera"}])
+        with patch.dict(os.environ, {"EBAY_APP_ID": "your_ebay_app_id_here", "EBAY_CERT_ID": "your_ebay_cert_id_here"}):
+            results = pricer.price_camera_listings([{"title": "No price camera"}])
         self.assertEqual(len(results), 1)
         item = results[0]
         self.assertEqual(item["estimated_market_value"], 45.0)  # Default fallback

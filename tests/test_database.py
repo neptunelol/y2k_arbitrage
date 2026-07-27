@@ -161,8 +161,10 @@ class TestDatabaseModule(unittest.TestCase):
         self.assertEqual(database.check_existing_urls([]), set())
         self.assertEqual(database.check_existing_urls(["https://ebay.com/1"], client=None), set())
 
-    def test_save_listings_dry_run_fallback(self):
+    @patch("modules.database.get_supabase_client")
+    def test_save_listings_dry_run_fallback(self, mock_get_client):
         """Verify save_listings in dry-run mode (client=None) counts valid items as skipped."""
+        mock_get_client.return_value = None
         listings = [
             {"url": "https://ebay.com/itm/1", "title": "Camera 1"},
             {"url": "https://ebay.com/itm/2", "title": "Camera 2"},

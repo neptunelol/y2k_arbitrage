@@ -16,7 +16,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Hardcoded fallback list of 10 search query terms
-DEFAULT_SEARCH_QUERIES: list[str] = [
+GENERIC_SEARCH_QUERIES: list[str] = [
     "Old silver camera",
     "Untested digital camera",
     "Vintage point and shoot",
@@ -28,6 +28,22 @@ DEFAULT_SEARCH_QUERIES: list[str] = [
     "Old compact camera",
     "Grandma camera digital",
 ]
+
+EXACT_SEARCH_QUERIES: list[str] = [
+    "Canon PowerShot SD1000",
+    "Sony Cyber-shot DSC-T700",
+    "Sony Cyber-shot DSC-W55",
+    "Canon PowerShot A540",
+    "Fujifilm FinePix F30",
+    "Fujifilm FinePix F50fd",
+    "Panasonic Lumix DMC-LX3",
+    "Nikon Coolpix S200",
+    "Nikon Coolpix L3",
+    "Olympus XZ-1",
+]
+
+# Hardcoded fallback list of 10 search query terms
+DEFAULT_SEARCH_QUERIES: list[str] = GENERIC_SEARCH_QUERIES
 
 
 def is_placeholder_credential(val: str | None) -> bool:
@@ -88,18 +104,24 @@ def scrape_ebay_listings(
     queries: list[str] | None = None,
     max_results: int | None = None,
     environment: str | None = None,
+    search_type: str = "generic",
 ) -> list[dict[str, Any]]:
     """
     Scrapes eBay item summaries using eBay Browse API.
 
-    :param queries: Optional list of search terms. Defaults to 10 fallback query terms.
+    :param queries: Optional list of search terms. Defaults to GENERIC_SEARCH_QUERIES or EXACT_SEARCH_QUERIES based on search_type.
     :param max_results: Optional limit per query. Defaults to MAX_RESULTS_PER_QUERY env var (default 5).
     :param environment: Optional environment ("sandbox" or "production"). Defaults to EBAY_ENVIRONMENT env var.
+    :param search_type: Search track ('generic' or 'exact'). Defaults to 'generic'.
     :return: Deduplicated list of listing dicts matching the schema:
-             title (str), url (str), price (float), image_urls (list[str]), seller_description (str).
+             title (str), url (str), price (float), image_urls (list[str]), seller_description (str),
+             search_type (str), identified_model (str, injected for 'exact' track).
     """
     if queries is None:
-        queries = DEFAULT_SEARCH_QUERIES
+        if search_type == "exact":
+            queries = EXACT_SEARCH_QUERIES
+        else:
+            queries = GENERIC_SEARCH_QUERIES
 
     if max_results is None:
         raw_max = os.getenv("MAX_RESULTS_PER_QUERY", "5")
@@ -196,7 +218,11 @@ def scrape_ebay_listings(
                     "price": price_val,
                     "image_urls": image_urls,
                     "seller_description": seller_description,
+                    "search_type": search_type,
                 }
+                if search_type == "exact":
+                    listing_dict["identified_model"] = query
+
                 deduplicated_listings.append(listing_dict)
 
         except Exception as exc:
@@ -208,3 +234,4 @@ def scrape_ebay_listings(
 
 # Alias export for compatibility
 fetch_ebay_listings = scrape_ebay_listings
+

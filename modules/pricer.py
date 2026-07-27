@@ -50,6 +50,17 @@ def get_min_profit_margin() -> float:
         return 40.0
 
 
+def get_exact_match_margin() -> float:
+    """Read EXACT_MATCH_MARGIN environment variable with a safe default of 25.0."""
+    raw_val = os.getenv("EXACT_MATCH_MARGIN", "25.0")
+    try:
+        return float(raw_val)
+    except (ValueError, TypeError):
+        logger.warning("Invalid EXACT_MATCH_MARGIN value '%s'. Defaulting to 25.0.", raw_val)
+        return 25.0
+
+
+
 def extract_asking_price(listing: dict[str, Any]) -> float | None:
     """
     Safely extract asking price float from listing dictionary using 'asking_price' or 'price'.
@@ -252,7 +263,8 @@ def price_camera_listings(
     if filtered_listings is None:
         return []
 
-    min_margin = get_min_profit_margin()
+    min_generic_margin = get_min_profit_margin()
+    min_exact_margin = get_exact_match_margin()
     priced_listings: list[dict[str, Any]] = []
 
     for listing in filtered_listings:
@@ -265,6 +277,9 @@ def price_camera_listings(
 
         market_val = get_estimated_market_value(model_name, environment=environment)
         margin = calculate_profit_margin(asking_price, market_val)
+
+        search_type = item.get("search_type", "generic")
+        min_margin = min_exact_margin if search_type == "exact" else min_generic_margin
 
         is_profitable = False
         if margin is not None and margin >= min_margin:

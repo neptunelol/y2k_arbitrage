@@ -15,11 +15,14 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def is_placeholder_credential(url: str | None = None, key: str | None = None) -> bool:
+_SENTINEL = object()
+
+
+def is_placeholder_credential(url: Any = _SENTINEL, key: Any = _SENTINEL) -> bool:
     """Check if Supabase credentials are missing or set to placeholder values."""
-    if url is None:
+    if url is _SENTINEL:
         url = os.getenv("SUPABASE_URL", "")
-    if key is None:
+    if key is _SENTINEL:
         key = os.getenv("SUPABASE_KEY", "")
 
     if not url or not key:
