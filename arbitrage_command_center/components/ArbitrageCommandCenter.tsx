@@ -168,7 +168,7 @@ export default function ArbitrageCommandCenter() {
   // Scanner status state
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanType, setScanType] = useState<string | null>(null);
-  const [lastScanTime, setLastScanTime] = useState<string>(new Date().toLocaleTimeString());
+  const [lastScanTime, setLastScanTime] = useState<string>("Just now");
 
   // Detail Modal State
   const [detailModalItem, setDetailModalItem] = useState<ArbitrageItem | null>(null);
@@ -184,6 +184,7 @@ export default function ArbitrageCommandCenter() {
 
   useEffect(() => {
     setMounted(true);
+    setLastScanTime(new Date().toLocaleTimeString());
     const hasSeen = localStorage.getItem("hasSeenCheatSheet");
     if (!hasSeen) {
       setIsCheatSheetOpen(true);
