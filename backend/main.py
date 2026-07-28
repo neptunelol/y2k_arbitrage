@@ -561,8 +561,11 @@ def run_scheduler(
     if once:
         return asyncio.run(run_scheduler_async(once=True, exact_interval=exact_interval, generic_interval=generic_interval))
 
-    signal.signal(signal.SIGINT, handle_shutdown_signal)
-    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    try:
+        signal.signal(signal.SIGINT, handle_shutdown_signal)
+        signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    except ValueError:
+        pass
 
     try:
         return asyncio.run(run_scheduler_async(once=False, exact_interval=exact_interval, generic_interval=generic_interval))
@@ -575,18 +578,32 @@ def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="eBay Y2K Camera Arbitrage Bot Orchestrator")
     parser.add_argument("--once", "-o", action="store_true", help="Run one pass of exact and generic pipelines and exit")
-    parser.add_argument("--loop", "-l", action="store_true", help="Run non-blocking dual scheduler daemon (default)")
-    parser.add_argument("--server", "-s", action="store_true", help="Start FastAPI web server")
+    parser.add_argument("--server-only", action="store_true", help="Start FastAPI web server only without scheduler thread")
     args = parser.parse_args()
 
     validate_environment()
 
-    if args.server:
-        import uvicorn
-        port = int(os.getenv("PORT", "8000"))
-        uvicorn.run(app, host="0.0.0.0", port=port)
-    else:
-        run_scheduler(once=args.once)
+    if args.once:
+        run_scheduler(once=True)
+        return
+
+    import threading
+    import uvicorn
+
+    port = int(os.getenv("PORT", "8000"))
+
+    if not args.server_only:
+        # Start scheduler daemon in a background thread
+        scheduler_thread = threading.Thread(
+            target=run_scheduler,
+            kwargs={"once": False},
+            daemon=True
+        )
+        scheduler_thread.start()
+        logger.info("[MAIN] Background scheduler thread started. Starting FastAPI server on http://localhost:%d...", port)
+
+    # Run FastAPI web server on main thread
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
