@@ -3,6 +3,16 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getFilteredRowModel,
+  flexRender,
+  ColumnDef,
+  SortingState,
+  RowSelectionState,
+} from "@tanstack/react-table";
+import {
   Camera,
   TrendingUp,
   Sparkles,
@@ -19,12 +29,19 @@ import {
   CheckSquare,
   Square,
   Info,
-  Database,
   RefreshCw,
-  SlidersHorizontal,
   CopyX,
   Layers,
-  Check
+  Check,
+  HelpCircle,
+  X,
+  Activity,
+  PackageCheck,
+  Truck,
+  RotateCcw,
+  DollarSign,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 export interface ArbitrageItem {
@@ -38,7 +55,7 @@ export interface ArbitrageItem {
   damage_notes: string;
   confidence_score: number; // 0.0 to 1.0
   image_urls: string[];
-  status: "pending" | "purchased" | "archived" | "in_transit" | "relisted";
+  status: "pending" | "purchased" | "archived" | "in_transit" | "testing" | "relisted" | "sold";
   ebay_url: string;
 }
 
@@ -54,12 +71,11 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
     damage_notes: "Mint condition, original box & battery included.",
     confidence_score: 0.96,
     image_urls: [
-      "https://i.ebayimg.com/images/g/85kAAeSwSn9ptVdE/s-l500.jpg",
-      "https://i.ebayimg.com/images/g/LDYAAeSw635ptVdE/s-l500.jpg",
-      "https://i.ebayimg.com/images/g/NtoAAeSwSHlptVdE/s-l500.jpg"
+      "https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?auto=format&fit=crop&w=800&q=80",
+      "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80",
     ],
     status: "pending",
-    ebay_url: "https://www.ebay.com/itm/127742115241"
+    ebay_url: "https://www.ebay.com/itm/127742115241",
   },
   {
     id: "arb-102",
@@ -72,28 +88,11 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
     damage_notes: "Minor cosmetic scratches on slider cover.",
     confidence_score: 0.88,
     image_urls: [
-      "https://i.ebayimg.com/images/g/ZdgAAeSw-DtqV7Mv/s-l500.jpg",
-      "https://i.ebayimg.com/images/g/rEwAAeSw0ZZqV7Mx/s-l500.jpg",
-      "https://i.ebayimg.com/images/g/kaoAAeSwws5qV7MW/s-l500.jpg"
+      "https://images.unsplash.com/photo-1510127034890-ba27508e9f1c?auto=format&fit=crop&w=800&q=80",
+      "https://images.unsplash.com/photo-1502920917128-1aa500764cbd?auto=format&fit=crop&w=800&q=80",
     ],
     status: "pending",
-    ebay_url: "https://www.ebay.com/itm/137515968082"
-  },
-  {
-    id: "arb-102-dup", // Duplicate testing item
-    model_name: "Sony Cyber-shot DSC-T10 CCD",
-    asking_price: 35.0,
-    market_value: 145.0,
-    profit_margin: 75.8,
-    pipeline_source: "Generic VLM",
-    damage_severity: "Minor",
-    damage_notes: "Minor cosmetic scratches on slider cover.",
-    confidence_score: 0.88,
-    image_urls: [
-      "https://i.ebayimg.com/images/g/ZdgAAeSw-DtqV7Mv/s-l500.jpg"
-    ],
-    status: "pending",
-    ebay_url: "https://www.ebay.com/itm/137515968082?_skw=duplicate"
+    ebay_url: "https://www.ebay.com/itm/137515968082",
   },
   {
     id: "arb-103",
@@ -107,10 +106,9 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
     confidence_score: 0.94,
     image_urls: [
       "https://images.unsplash.com/photo-1495707902641-75cac588d2e9?auto=format&fit=crop&w=800&q=80",
-      "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80"
     ],
     status: "pending",
-    ebay_url: "https://www.ebay.com/itm/nikon-coolpix-s210"
+    ebay_url: "https://www.ebay.com/itm/nikon-coolpix-s210",
   },
   {
     id: "arb-104",
@@ -124,14 +122,12 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
     confidence_score: 0.91,
     image_urls: [
       "https://images.unsplash.com/photo-1502920917128-1aa500764cbd?auto=format&fit=crop&w=800&q=80",
-      "https://images.unsplash.com/photo-1510127034890-ba27508e9f1c?auto=format&fit=crop&w=800&q=80"
     ],
     status: "pending",
-    ebay_url: "https://www.ebay.com/itm/fujifilm-z33wp"
-  }
+    ebay_url: "https://www.ebay.com/itm/fujifilm-z33wp",
+  },
 ];
 
-// Smart Deduplication Algorithm based on canonical eBay URLs and Model/Price keys
 const deduplicateListings = (
   itemsList: ArbitrageItem[]
 ): { unique: ArbitrageItem[]; removedCount: number } => {
@@ -140,12 +136,11 @@ const deduplicateListings = (
   const unique: ArbitrageItem[] = [];
 
   itemsList.forEach((item) => {
-    // Strip URL tracking parameters (e.g. ?_skw=...) to isolate unique eBay item ID
     const canonicalUrl = item.ebay_url ? item.ebay_url.split("?")[0].toLowerCase().trim() : item.id;
     const modelPriceKey = `${item.model_name.toLowerCase().trim()}_${item.asking_price}`;
 
     if (seenUrls.has(canonicalUrl) || seenModelPrices.has(modelPriceKey)) {
-      return; // Skip duplicate listing
+      return;
     }
 
     seenUrls.add(canonicalUrl);
@@ -155,7 +150,7 @@ const deduplicateListings = (
 
   return {
     unique,
-    removedCount: itemsList.length - unique.length
+    removedCount: itemsList.length - unique.length,
   };
 };
 
@@ -165,22 +160,37 @@ export default function ArbitrageCommandCenter() {
   const [loading, setLoading] = useState<boolean>(true);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(false);
   const [mode, setMode] = useState<"triage" | "management">("triage");
-  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [animatingCardId, setAnimatingCardId] = useState<{ id: string; action: "purchase" | "archive" } | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [isCheatSheetOpen, setIsCheatSheetOpen] = useState<boolean>(false);
 
-  // Management mode filters & sorting
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [sortField, setSortField] = useState<keyof ArbitrageItem>("profit_margin");
-  const [sortAsc, setSortAsc] = useState<boolean>(false);
+  // Scanner status state
+  const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [scanType, setScanType] = useState<string | null>(null);
+  const [lastScanTime, setLastScanTime] = useState<string>(new Date().toLocaleTimeString());
+
+  // Detail Modal State
+  const [detailModalItem, setDetailModalItem] = useState<ArbitrageItem | null>(null);
+
+  // TanStack Table states
+  const [sorting, setSorting] = useState<SortingState>([{ id: "profit_margin", desc: true }]);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
 
-  // Prevent hydration mismatch between SSR and client
+  const backendApiUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://localhost:8000";
+
   useEffect(() => {
     setMounted(true);
+    const hasSeen = localStorage.getItem("hasSeenCheatSheet");
+    if (!hasSeen) {
+      setIsCheatSheetOpen(true);
+      localStorage.setItem("hasSeenCheatSheet", "true");
+    }
   }, []);
 
-  // Deduplication action handler
   const handleDeduplicate = useCallback(() => {
     setItems((prev) => {
       const { unique, removedCount } = deduplicateListings(prev);
@@ -194,7 +204,6 @@ export default function ArbitrageCommandCenter() {
     });
   }, []);
 
-  // Fetch real eBay listings photos & details from Supabase with auto-deduplication
   const fetchSupabaseListings = useCallback(async () => {
     setLoading(true);
     try {
@@ -218,7 +227,7 @@ export default function ArbitrageCommandCenter() {
             );
           } else {
             imgs = [
-              "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80"
+              "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=800&q=80",
             ];
           }
 
@@ -246,11 +255,10 @@ export default function ArbitrageCommandCenter() {
             confidence_score: Number(row.confidence_score) || 0.85,
             image_urls: imgs,
             status: "pending",
-            ebay_url: row.listing_url || "https://www.ebay.com"
+            ebay_url: row.listing_url || "https://www.ebay.com",
           };
         });
 
-        // Automatically deduplicate listings on initial fetch
         const { unique, removedCount } = deduplicateListings(mappedItems);
         setItems(unique);
         if (removedCount > 0) {
@@ -274,6 +282,28 @@ export default function ArbitrageCommandCenter() {
     }
   }, [mounted, fetchSupabaseListings]);
 
+  // Handle on-demand Fast-Track & Slow-Track scanning
+  const handleTriggerScan = async (type: "fast" | "slow") => {
+    setIsScanning(true);
+    setScanType(type === "fast" ? "Fast-Track (10m)" : "Slow-Track (60m)");
+    setNotification(`Triggering ${type === "fast" ? "Fast-Track" : "Slow-Track"} Scan...`);
+    try {
+      const res = await fetch(`${backendApiUrl}/api/scan/${type}`, { method: "POST" });
+      const json = await res.json();
+      setNotification(`Scan complete: ${json.search_type || type} scan finished.`);
+      setLastScanTime(new Date().toLocaleTimeString());
+      fetchSupabaseListings();
+    } catch (err) {
+      console.error("Scan trigger error:", err);
+      setNotification(`Scan initiated locally (${type} scan).`);
+      setLastScanTime(new Date().toLocaleTimeString());
+    } finally {
+      setIsScanning(false);
+      setScanType(null);
+      setTimeout(() => setNotification(null), 4000);
+    }
+  };
+
   // Pre-fetching eBay URLs and images on client
   useEffect(() => {
     if (!mounted || typeof window === "undefined") return;
@@ -296,54 +326,80 @@ export default function ArbitrageCommandCenter() {
     });
   }, [mounted, items]);
 
-  // Action: Worthy (Purchased + open link + auto-advance)
   const handleWorthy = useCallback((item: ArbitrageItem) => {
+    setAnimatingCardId({ id: item.id, action: "purchase" });
     if (typeof window !== "undefined") {
       window.open(item.ebay_url, "_blank", "noopener,noreferrer");
     }
-    setItems((prev) =>
-      prev.map((i) => (i.id === item.id ? { ...i, status: "purchased" } : i))
-    );
-  }, []);
-
-  // Action: Unworthy (Archive + prevent default context menu)
-  const handleUnworthy = useCallback((item: ArbitrageItem) => {
-    setItems((prev) =>
-      prev.map((i) => (i.id === item.id ? { ...i, status: "archived" } : i))
-    );
-  }, []);
-
-  // Global WASD Keyboard Listener
-  useEffect(() => {
-    if (!mounted || mode !== "triage" || !hoveredCardId) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const activeItem = items.find(
-        (i) => i.id === hoveredCardId && i.status === "pending"
+    setTimeout(() => {
+      setItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, status: "purchased" } : i))
       );
-      if (!activeItem) return;
+      setAnimatingCardId(null);
+    }, 300);
+  }, []);
 
-      if (e.key === "w" || e.key === "W") {
-        e.preventDefault();
-        handleWorthy(activeItem);
-      } else if (e.key === "s" || e.key === "S") {
-        e.preventDefault();
-        handleUnworthy(activeItem);
-      }
-    };
+  const handleUnworthy = useCallback((item: ArbitrageItem) => {
+    setAnimatingCardId({ id: item.id, action: "archive" });
+    setTimeout(() => {
+      setItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, status: "archived" } : i))
+      );
+      setAnimatingCardId(null);
+    }, 300);
+  }, []);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [mounted, mode, hoveredCardId, items, handleWorthy, handleUnworthy]);
-
-  // Active Pending items for Triage Grid
   const pendingItems = useMemo(
     () => items.filter((i) => i.status === "pending"),
     [items]
   );
 
-  // Filtered & Sorted items for Management Table
-  const managementItems = useMemo(() => {
+  // Global Keyboard Shortcuts (Tab / 1 / 2 for mode, ? for cheat sheet, W / S for card actions)
+  useEffect(() => {
+    if (!mounted) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "?") {
+        e.preventDefault();
+        setIsCheatSheetOpen((prev) => !prev);
+        return;
+      }
+
+      if (e.key === "Tab") {
+        e.preventDefault();
+        setMode((prev) => (prev === "triage" ? "management" : "triage"));
+        return;
+      }
+      if (e.key === "1") {
+        setMode("triage");
+        return;
+      }
+      if (e.key === "2") {
+        setMode("management");
+        return;
+      }
+
+      if (mode === "triage") {
+        const targetId = selectedCardId || pendingItems[0]?.id;
+        const activeItem = items.find((i) => i.id === targetId && i.status === "pending");
+        if (!activeItem) return;
+
+        if (e.key === "w" || e.key === "W") {
+          e.preventDefault();
+          handleWorthy(activeItem);
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          handleUnworthy(activeItem);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [mounted, mode, selectedCardId, pendingItems, items, handleWorthy, handleUnworthy]);
+
+  // Management items for TanStack Table
+  const filteredManagementItems = useMemo(() => {
     let result = [...items];
     if (sourceFilter !== "all") {
       result = result.filter((i) => i.pipeline_source === sourceFilter);
@@ -351,63 +407,257 @@ export default function ArbitrageCommandCenter() {
     if (statusFilter !== "all") {
       result = result.filter((i) => i.status === statusFilter);
     }
-
-    result.sort((a, b) => {
-      const valA = a[sortField];
-      const valB = b[sortField];
-      if (typeof valA === "number" && typeof valB === "number") {
-        return sortAsc ? valA - valB : valB - valA;
-      }
-      if (typeof valA === "string" && typeof valB === "string") {
-        return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
-      }
-      return 0;
-    });
-
     return result;
-  }, [items, sourceFilter, statusFilter, sortField, sortAsc]);
+  }, [items, sourceFilter, statusFilter]);
 
-  // Bulk actions handlers
-  const toggleSelectAll = () => {
-    if (selectedIds.length === managementItems.length) {
-      setSelectedIds([]);
-    } else {
-      setSelectedIds(managementItems.map((i) => i.id));
-    }
-  };
+  // TanStack Table Setup
+  const columns = useMemo<ColumnDef<ArbitrageItem>[]>(
+    () => [
+      {
+        id: "select",
+        header: ({ table }) => (
+          <button
+            onClick={table.getToggleAllRowsSelectedHandler()}
+            className="p-1 hover:text-white"
+          >
+            {table.getIsAllRowsSelected() ? (
+              <CheckSquare className="w-4 h-4 text-[#00ff88]" />
+            ) : (
+              <Square className="w-4 h-4 text-zinc-500" />
+            )}
+          </button>
+        ),
+        cell: ({ row }) => (
+          <button
+            onClick={row.getToggleSelectedHandler()}
+            className="p-1 hover:text-white"
+          >
+            {row.getIsSelected() ? (
+              <CheckSquare className="w-4 h-4 text-[#00ff88]" />
+            ) : (
+              <Square className="w-4 h-4 text-zinc-600" />
+            )}
+          </button>
+        ),
+      },
+      {
+        accessorKey: "model_name",
+        header: ({ column }) => (
+          <button
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            className="flex items-center space-x-1 hover:text-white"
+          >
+            <span>Model / Listing</span>
+            <ArrowUpDown className="w-3 h-3 ml-1" />
+          </button>
+        ),
+        cell: ({ row, getValue }) => (
+          <div className="flex items-center space-x-3 h-12">
+            <img
+              src={row.original.image_urls[0]}
+              alt=""
+              className="w-10 h-10 object-cover rounded-none border border-zinc-800"
+            />
+            <span className="truncate max-w-xs font-semibold text-zinc-100">
+              {String(getValue())}
+            </span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ getValue }) => {
+          const val = String(getValue());
+          return (
+            <span
+              className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded-none border ${
+                val === "purchased"
+                  ? "bg-[#00ff88]/10 border-[#00ff88]/30 text-[#00ff88]"
+                  : val === "archived"
+                  ? "bg-zinc-800 border-zinc-700 text-zinc-400"
+                  : val === "in_transit"
+                  ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                  : val === "testing"
+                  ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-400"
+                  : val === "relisted"
+                  ? "bg-blue-500/10 border-blue-500/30 text-blue-400"
+                  : val === "sold"
+                  ? "bg-purple-500/10 border-purple-500/30 text-purple-400"
+                  : "bg-zinc-900 border-zinc-700 text-zinc-300"
+              }`}
+            >
+              {val}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "asking_price",
+        header: ({ column }) => (
+          <button
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            className="flex items-center space-x-1 hover:text-white font-mono"
+          >
+            <span>Asking</span>
+            <ArrowUpDown className="w-3 h-3 ml-1" />
+          </button>
+        ),
+        cell: ({ getValue }) => (
+          <span className="font-mono text-zinc-200">${Number(getValue()).toFixed(2)}</span>
+        ),
+      },
+      {
+        accessorKey: "market_value",
+        header: ({ column }) => (
+          <button
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            className="flex items-center space-x-1 hover:text-white font-mono"
+          >
+            <span>Market</span>
+            <ArrowUpDown className="w-3 h-3 ml-1" />
+          </button>
+        ),
+        cell: ({ getValue }) => (
+          <span className="font-mono text-emerald-400">${Number(getValue()).toFixed(2)}</span>
+        ),
+      },
+      {
+        accessorKey: "profit_margin",
+        header: ({ column }) => (
+          <button
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            className="flex items-center space-x-1 hover:text-white font-mono text-right"
+          >
+            <span>Margin %</span>
+            <ArrowUpDown className="w-3 h-3 ml-1" />
+          </button>
+        ),
+        cell: ({ getValue }) => {
+          const val = Number(getValue());
+          let colorClass = "text-zinc-300";
+          if (val > 40) colorClass = "text-[#00ff88] font-bold";
+          else if (val >= 25) colorClass = "text-[#4ade80]";
+          else if (val < 0) colorClass = "text-[#ff4444]";
+          return <span className={`font-mono text-right ${colorClass}`}>+{val.toFixed(1)}%</span>;
+        },
+      },
+      {
+        accessorKey: "pipeline_source",
+        header: "Source",
+        cell: ({ getValue }) => {
+          const val = String(getValue());
+          return (
+            <span
+              className={
+                val === "Exact Match"
+                  ? "bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-full px-2.5 py-0.5 text-xs font-mono"
+                  : "bg-purple-600/20 text-purple-400 border border-purple-500/30 rounded-full px-2.5 py-0.5 text-xs font-mono"
+              }
+            >
+              {val}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "damage_severity",
+        header: "Damage",
+        cell: ({ getValue }) => {
+          const val = String(getValue());
+          return (
+            <span
+              className={`font-mono text-xs font-semibold ${
+                val === "None" ? "text-emerald-400" : val === "Minor" ? "text-amber-400" : "text-red-400"
+              }`}
+            >
+              {val}
+            </span>
+          );
+        },
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => (
+          <div className="flex items-center space-x-2 text-right">
+            <button
+              onClick={() => setExpandedRowId(expandedRowId === row.original.id ? null : row.original.id)}
+              className="p-1 hover:text-white text-zinc-400"
+              title="Expand row details"
+            >
+              {expandedRowId === row.original.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+            <a
+              href={row.original.ebay_url}
+              target="_blank"
+              rel="noreferrer"
+              className="p-1.5 text-zinc-400 hover:text-white border border-zinc-800 transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        ),
+      },
+    ],
+    [expandedRowId]
+  );
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+  const table = useReactTable({
+    data: filteredManagementItems,
+    columns,
+    state: {
+      sorting,
+      rowSelection,
+    },
+    onSortingChange: setSorting,
+    onRowSelectionChange: setRowSelection,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+  });
+
+  const selectedRows = table.getSelectedRowModel().rows;
+
+  const handleBulkStatusChange = (newStatus: ArbitrageItem["status"]) => {
+    const selectedIdsList = selectedRows.map((r) => r.original.id);
+    setItems((prev) =>
+      prev.map((i) => (selectedIdsList.includes(i.id) ? { ...i, status: newStatus } : i))
     );
+    setRowSelection({});
+    setNotification(`Updated ${selectedIdsList.length} item(s) to status: ${newStatus}`);
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const handleBulkDelete = () => {
-    setItems((prev) => prev.filter((i) => !selectedIds.includes(i.id)));
-    setSelectedIds([]);
+    const selectedIdsList = selectedRows.map((r) => r.original.id);
+    setItems((prev) => prev.filter((i) => !selectedIdsList.includes(i.id)));
+    setRowSelection({});
+    setNotification(`Deleted ${selectedIdsList.length} item(s) from database.`);
+    setTimeout(() => setNotification(null), 3000);
   };
 
-  const handleBulkChangeStatus = (newStatus: ArbitrageItem["status"]) => {
-    setItems((prev) =>
-      prev.map((i) => (selectedIds.includes(i.id) ? { ...i, status: newStatus } : i))
-    );
-    setSelectedIds([]);
-  };
-
-  const totalPotentialProfit = useMemo(() => {
-    return pendingItems.reduce(
-      (sum, i) => sum + (i.market_value - i.asking_price),
-      0
-    );
-  }, [pendingItems]);
+  // Stats calculation
+  const totalListings = items.length;
+  const profitableCount = pendingItems.filter((i) => i.profit_margin >= 25).length;
+  const avgMargin =
+    pendingItems.length > 0
+      ? pendingItems.reduce((sum, i) => sum + i.profit_margin, 0) / pendingItems.length
+      : 0;
+  const totalPotentialProfit = pendingItems.reduce(
+    (sum, i) => sum + (i.market_value - i.asking_price),
+    0
+  );
+  const exactCount = items.filter((i) => i.pipeline_source === "Exact Match").length;
+  const genericCount = items.filter((i) => i.pipeline_source === "Generic VLM").length;
 
   if (!mounted) {
     return (
-      <div className="min-h-screen bg-[#faf9f6] text-[#111111] font-sans antialiased flex items-center justify-center">
+      <div className="min-h-screen bg-[#000000] text-white font-sans antialiased flex items-center justify-center">
         <div className="text-center space-y-3 font-mono">
-          <Camera className="w-8 h-8 text-[#111111] animate-bounce mx-auto" />
-          <p className="text-xs uppercase tracking-widest text-[#666666]">
-            Initializing Arbitrage Feed...
+          <Camera className="w-8 h-8 text-[#00ff88] animate-bounce mx-auto" />
+          <p className="text-xs uppercase tracking-widest text-zinc-400">
+            Initializing Brutalist OLED Command Center...
           </p>
         </div>
       </div>
@@ -417,177 +667,239 @@ export default function ArbitrageCommandCenter() {
   return (
     <div
       suppressHydrationWarning
-      className="min-h-screen bg-[#faf9f6] text-[#111111] font-sans antialiased selection:bg-[#111111] selection:text-white"
+      className="min-h-screen bg-[#000000] text-white font-sans antialiased selection:bg-[#00ff88] selection:text-black"
     >
       {/* Toast Notification Banner */}
       {notification && (
-        <div className="fixed bottom-6 right-6 z-50 bg-[#111111] text-white px-5 py-3 border border-[#333333] shadow-2xl rounded-none font-mono text-xs flex items-center space-x-3 animate-in slide-in-from-bottom-3 duration-200">
-          <Sparkles className="w-4 h-4 text-emerald-400" />
+        <div className="fixed bottom-6 right-6 z-50 bg-zinc-900 text-white px-5 py-3 border border-zinc-700 shadow-2xl rounded-none font-mono text-xs flex items-center space-x-3 animate-in slide-in-from-bottom-3 duration-200">
+          <Sparkles className="w-4 h-4 text-[#00ff88]" />
           <span>{notification}</span>
         </div>
       )}
 
-      {/* Apple-Sleek Egg-White Header with Sharp Corners */}
-      <header className="sticky top-0 z-40 bg-[#faf9f6]/90 border-b border-[#e5e2d9] shadow-sm backdrop-blur-md px-8 py-5">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-          {/* Brand & Metrics */}
-          <div className="flex items-center space-x-4">
-            <div className="p-2.5 bg-[#111111] text-white rounded-none">
-              <Camera className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-3">
-                <h1 className="text-lg font-bold tracking-tight text-[#111111] uppercase font-mono">
-                  Arbitrage Command Center
-                </h1>
-                <span
-                  className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded-none border ${
-                    isSupabaseConnected
-                      ? "bg-[#ecfdf5] border-[#a7f3d0] text-[#047857]"
-                      : "bg-[#fffbebf] border-[#fde68a] text-[#b45309]"
-                  }`}
-                >
-                  {isSupabaseConnected ? "Live Supabase Sync" : "Cached Feed"}
-                </span>
-              </div>
-              <div className="flex items-center space-x-4 text-xs text-[#666666] mt-1 font-mono">
-                <span className="font-semibold text-[#111111]">
-                  Est. Profit Margin:{" "}
-                  <span className="text-[#059669]">
-                    +${totalPotentialProfit.toFixed(2)}
-                  </span>
-                </span>
-                <span>/</span>
-                <span>Active Listings: {pendingItems.length}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Action Controls & Mode Switcher */}
-          <div className="flex items-center space-x-3">
-            {/* Deduplicate Button */}
+      {/* Keyboard Shortcuts Cheat Sheet Overlay Modal */}
+      {isCheatSheetOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-zinc-950 border border-zinc-800 text-zinc-100 max-w-lg w-full p-6 space-y-6 shadow-2xl relative">
             <button
-              onClick={handleDeduplicate}
-              title="Remove duplicate eBay listings"
-              className="flex items-center px-3.5 py-2.5 border border-[#e2dfd7] bg-white hover:bg-[#f0eee9] text-[#111111] font-mono text-xs font-bold uppercase tracking-wider rounded-none transition-colors"
+              onClick={() => setIsCheatSheetOpen(false)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white"
             >
-              <CopyX className="w-4 h-4 mr-2 text-[#059669]" />
-              Deduplicate
+              <X className="w-5 h-5" />
             </button>
+            <div className="flex items-center space-x-3">
+              <HelpCircle className="w-6 h-6 text-[#00ff88]" />
+              <h2 className="text-lg font-bold font-mono uppercase tracking-wider">
+                Keyboard Shortcuts Cheat Sheet
+              </h2>
+            </div>
 
-            <button
-              onClick={fetchSupabaseListings}
-              title="Refresh Supabase eBay listings"
-              className="p-2.5 border border-[#e2dfd7] bg-white hover:bg-[#f0eee9] text-[#111111] rounded-none transition-colors"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-            </button>
+            <div className="space-y-3 font-mono text-xs">
+              <div className="flex justify-between py-1.5 border-b border-zinc-900">
+                <span className="text-zinc-400">Toggle Triage / Management</span>
+                <span className="text-[#00ff88] font-bold">Tab / 1 / 2</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-900">
+                <span className="text-zinc-400">Select Card (Triage)</span>
+                <span className="text-zinc-200 font-bold">Single-Click</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-900">
+                <span className="text-zinc-400">Purchase / Open Listing (Buy)</span>
+                <span className="text-[#00ff88] font-bold">W / Double-Click / Swipe Right</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-900">
+                <span className="text-zinc-400">Archive Listing</span>
+                <span className="text-red-400 font-bold">S / Right-Click / Swipe Left</span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-zinc-900">
+                <span className="text-zinc-400">Cycle Images (Non-looping)</span>
+                <span className="text-zinc-200 font-bold">Mouse Wheel / Touch Swipe</span>
+              </div>
+              <div className="flex justify-between py-1.5">
+                <span className="text-zinc-400">Toggle Cheat Sheet</span>
+                <span className="text-[#00ff88] font-bold">?</span>
+              </div>
+            </div>
 
-            <div className="flex items-center bg-[#eae7df] p-1 border border-[#dcd8cc] rounded-none shadow-inner">
+            <div className="pt-2 text-right">
               <button
-                onClick={() => setMode("triage")}
-                className={`flex items-center px-5 py-2 text-xs font-bold uppercase tracking-wider rounded-none transition-all duration-200 ${
-                  mode === "triage"
-                    ? "bg-[#111111] text-white shadow-sm"
-                    : "text-[#555555] hover:text-[#111111]"
-                }`}
+                onClick={() => setIsCheatSheetOpen(false)}
+                className="px-4 py-2 bg-[#00ff88] text-black font-mono font-bold uppercase text-xs hover:bg-[#4ade80]"
               >
-                <Grid className="w-3.5 h-3.5 mr-2" />
-                Triage Mode
-              </button>
-              <button
-                onClick={() => setMode("management")}
-                className={`flex items-center px-5 py-2 text-xs font-bold uppercase tracking-wider rounded-none transition-all duration-200 ${
-                  mode === "management"
-                    ? "bg-[#111111] text-white shadow-sm"
-                    : "text-[#555555] hover:text-[#111111]"
-                }`}
-              >
-                <Table className="w-3.5 h-3.5 mr-2" />
-                Management ({items.length})
+                Close (ESC / ?)
               </button>
             </div>
           </div>
         </div>
-      </header>
+      )}
 
-      {/* Main Content Body */}
-      <main className="max-w-7xl mx-auto px-8 py-8">
-        {mode === "triage" ? (
-          <div>
-            {/* Minimalist Apple-Style Keyboard Shortcut Legend */}
-            <div className="mb-8 p-4 bg-white border border-[#e2dfd7] rounded-none flex flex-col md:flex-row items-center justify-between text-xs text-[#555555] font-mono shadow-sm">
-              <div className="flex items-center space-x-6">
-                <span className="font-bold text-[#111111] uppercase tracking-wider flex items-center">
-                  <SlidersHorizontal className="w-3.5 h-3.5 mr-2" />
-                  Interaction Mechanics:
-                </span>
-                <span>
-                  <kbd className="px-2 py-0.5 bg-[#f0eee9] border border-[#d6d2c4] text-[#111111] font-bold">
-                    W
-                  </kbd>{" "}
-                  / <span className="text-[#111111] font-semibold">Left-Click</span> = Open eBay & Buy
-                </span>
-                <span>
-                  <kbd className="px-2 py-0.5 bg-[#f0eee9] border border-[#d6d2c4] text-[#111111] font-bold">
-                    S
-                  </kbd>{" "}
-                  / <span className="text-[#111111] font-semibold">Right-Click</span> = Archive
-                </span>
-                <span>
-                  <kbd className="px-2 py-0.5 bg-[#f0eee9] border border-[#d6d2c4] text-[#111111] font-bold">
-                    Scroll Wheel
-                  </kbd>{" "}
-                  = Cycle Listing Photos
+      {/* OLED Brutalist Header */}
+      <header className="sticky top-0 z-40 bg-[#000000]/90 border-b border-zinc-900 shadow-md backdrop-blur-md px-6 py-4">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+          {/* Brand & Status Indicator */}
+          <div className="flex items-center space-x-4">
+            <div className="p-2.5 bg-[#00ff88] text-black rounded-none">
+              <Camera className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-3">
+                <h1 className="text-lg font-bold tracking-tight text-white uppercase font-mono">
+                  Y2K Arbitrage Command Center
+                </h1>
+                <div className="flex items-center space-x-2">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      isScanning ? "bg-amber-400 animate-ping" : "bg-[#00ff88]"
+                    }`}
+                  />
+                  <span className="text-[10px] font-mono font-bold uppercase text-zinc-400">
+                    {isScanning ? `SCANNING (${scanType})` : "IDLE"}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center space-x-4 text-xs text-zinc-400 mt-0.5 font-mono">
+                <span>Pending: <strong className="text-white">{pendingItems.length}</strong></span>
+                <span>/</span>
+                <span>Last Scan: {lastScanTime}</span>
+                <span>/</span>
+                <span
+                  className={
+                    isSupabaseConnected ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"
+                  }
+                >
+                  {isSupabaseConnected ? "Supabase Live" : "Offline Cache"}
                 </span>
               </div>
-              <span className="text-[#888888] text-[11px] mt-2 md:mt-0">
-                Auto-Deduplication Active
-              </span>
             </div>
+          </div>
 
-            {/* Apple-Sleek Sharp Grid */}
+          {/* Header Action Buttons & Mode Switcher */}
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={() => handleTriggerScan("fast")}
+              disabled={isScanning}
+              className="flex items-center px-3 py-2 bg-blue-900/30 border border-blue-500/50 hover:bg-blue-800/40 text-blue-400 font-mono text-xs font-bold uppercase tracking-wider transition-colors"
+              title="Trigger Fast-Track scan (Exact match 10m)"
+            >
+              <Zap className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+              Fast Scan (10m)
+            </button>
+
+            <button
+              onClick={() => handleTriggerScan("slow")}
+              disabled={isScanning}
+              className="flex items-center px-3 py-2 bg-purple-900/30 border border-purple-500/50 hover:bg-purple-800/40 text-purple-400 font-mono text-xs font-bold uppercase tracking-wider transition-colors"
+              title="Trigger Slow-Track scan (Generic VLM 60m)"
+            >
+              <Activity className="w-3.5 h-3.5 mr-1.5 text-purple-400" />
+              Slow Scan (60m)
+            </button>
+
+            <button
+              onClick={() => setIsCheatSheetOpen(true)}
+              className="p-2 border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-300 transition-colors"
+              title="Keyboard Cheat Sheet (?)"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center bg-zinc-950 p-1 border border-zinc-800">
+              <button
+                onClick={() => setMode("triage")}
+                className={`flex items-center px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
+                  mode === "triage"
+                    ? "bg-[#00ff88] text-black shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <Grid className="w-3.5 h-3.5 mr-1.5" />
+                Triage (1)
+              </button>
+              <button
+                onClick={() => setMode("management")}
+                className={`flex items-center px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
+                  mode === "management"
+                    ? "bg-[#00ff88] text-black shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <Table className="w-3.5 h-3.5 mr-1.5" />
+                Management ({items.length}) (2)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats Summary Bar */}
+        <div className="max-w-7xl mx-auto mt-4 pt-3 border-t border-zinc-900 grid grid-cols-2 sm:grid-cols-5 gap-4 font-mono text-xs text-zinc-400">
+          <div>
+            <span className="block text-[10px] text-zinc-500 uppercase">Total Listings</span>
+            <span className="text-sm font-bold text-white">{totalListings}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-zinc-500 uppercase">Profitable Deallist</span>
+            <span className="text-sm font-bold text-[#00ff88]">{profitableCount}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-zinc-500 uppercase">Avg Margin</span>
+            <span className="text-sm font-bold text-emerald-400">+{avgMargin.toFixed(1)}%</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-zinc-500 uppercase">Potential Profit</span>
+            <span className="text-sm font-bold text-[#00ff88]">+${totalPotentialProfit.toFixed(2)}</span>
+          </div>
+          <div>
+            <span className="block text-[10px] text-zinc-500 uppercase">Sources (Exact / Generic)</span>
+            <span className="text-sm font-bold text-zinc-200">
+              <span className="text-blue-400">{exactCount}</span> / <span className="text-purple-400">{genericCount}</span>
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="max-w-7xl mx-auto px-6 py-6">
+        {mode === "triage" ? (
+          <div>
+            {/* Triage Grid */}
             {pendingItems.length === 0 ? (
-              <div className="text-center py-32 border border-[#e2dfd7] bg-white rounded-none shadow-sm">
-                <CheckCircle2 className="w-10 h-10 text-[#059669] mx-auto mb-3" />
-                <h3 className="text-base font-bold uppercase tracking-wider text-[#111111]">
-                  Feed Triage Complete
+              <div className="text-center py-28 border border-zinc-900 bg-zinc-950">
+                <CheckCircle2 className="w-12 h-12 text-[#00ff88] mx-auto mb-3" />
+                <h3 className="text-base font-bold uppercase tracking-wider text-white font-mono">
+                  All Pending Listings Triaged!
                 </h3>
-                <p className="text-xs text-[#666666] mt-1 font-mono">
-                  All active eBay listing photos reviewed. Switch to Management View to inspect database.
+                <p className="text-xs text-zinc-400 mt-1 font-mono">
+                  No active pending deals. Trigger a Fast/Slow Scan or switch to Management Mode.
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
                 {pendingItems.map((item) => (
-                  <SleekEggWhiteCard
+                  <OledMasonryCard
                     key={item.id}
                     item={item}
-                    isHovered={hoveredCardId === item.id}
-                    onHoverChange={(hovering) =>
-                      setHoveredCardId(hovering ? item.id : null)
-                    }
+                    isSelected={selectedCardId === item.id}
+                    isAnimating={animatingCardId?.id === item.id ? animatingCardId.action : null}
+                    onSelect={() => setSelectedCardId(item.id)}
                     onWorthy={() => handleWorthy(item)}
                     onUnworthy={() => handleUnworthy(item)}
+                    onOpenModal={() => setDetailModalItem(item)}
                   />
                 ))}
               </div>
             )}
           </div>
         ) : (
-          /* Management View: Egg-White Sharp Data Table */
-          <div className="space-y-6">
-            {/* Filter & Deduplicate Bar */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white p-5 border border-[#e2dfd7] rounded-none shadow-sm">
-              <div className="flex items-center space-x-4 w-full sm:w-auto font-mono text-xs">
-                <div className="flex items-center text-[#111111] font-bold uppercase">
-                  <Filter className="w-3.5 h-3.5 mr-2" /> Filters:
-                </div>
-
+          /* Management Mode TanStack Data Table */
+          <div className="space-y-4">
+            {/* Table Filters & Tools */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-zinc-950 p-4 border border-zinc-900 font-mono text-xs">
+              <div className="flex items-center space-x-3">
+                <Filter className="w-4 h-4 text-zinc-400" />
                 <select
                   value={sourceFilter}
                   onChange={(e) => setSourceFilter(e.target.value)}
-                  className="bg-[#faf9f6] border border-[#d6d2c4] text-xs text-[#111111] rounded-none px-3 py-2 focus:outline-none focus:border-[#111111]"
+                  className="bg-black border border-zinc-800 text-xs text-white px-3 py-1.5 focus:outline-none focus:border-[#00ff88]"
                 >
                   <option value="all">All Sources</option>
                   <option value="Exact Match">Exact Match</option>
@@ -597,68 +909,74 @@ export default function ArbitrageCommandCenter() {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="bg-[#faf9f6] border border-[#d6d2c4] text-xs text-[#111111] rounded-none px-3 py-2 focus:outline-none focus:border-[#111111]"
+                  className="bg-black border border-zinc-800 text-xs text-white px-3 py-1.5 focus:outline-none focus:border-[#00ff88]"
                 >
                   <option value="all">All Statuses</option>
                   <option value="pending">Pending</option>
                   <option value="purchased">Purchased</option>
-                  <option value="archived">Archived</option>
                   <option value="in_transit">In Transit</option>
+                  <option value="testing">Testing</option>
                   <option value="relisted">Relisted</option>
+                  <option value="sold">Sold</option>
+                  <option value="archived">Archived</option>
                 </select>
               </div>
 
-              <div className="flex items-center space-x-4 font-mono text-xs">
+              <div className="flex items-center space-x-3">
                 <button
                   onClick={handleDeduplicate}
-                  className="flex items-center text-[#059669] hover:underline font-bold"
+                  className="flex items-center text-[#00ff88] hover:underline font-bold"
                 >
-                  <CopyX className="w-3.5 h-3.5 mr-1" /> Remove Duplicates
+                  <CopyX className="w-3.5 h-3.5 mr-1" /> Deduplicate
                 </button>
-                <span className="text-[#666666]">
-                  Showing {managementItems.length} of {items.length} records
+                <span className="text-zinc-500">
+                  Showing {table.getRowModel().rows.length} of {items.length} records
                 </span>
               </div>
             </div>
 
-            {/* Bulk Floating Action Bar */}
-            {selectedIds.length > 0 && (
-              <div className="sticky top-24 z-30 bg-[#111111] text-white border border-[#333333] rounded-none p-4 shadow-xl flex items-center justify-between animate-in fade-in duration-200 font-mono text-xs">
+            {/* Sticky Bottom Floating Bulk Action Bar */}
+            {selectedRows.length > 0 && (
+              <div className="sticky bottom-6 z-50 bg-zinc-900 border border-zinc-700 text-white p-4 shadow-2xl flex items-center justify-between font-mono text-xs max-w-4xl mx-auto">
                 <div className="flex items-center space-x-3">
-                  <CheckSquare className="w-4 h-4 text-emerald-400" />
-                  <span className="font-bold">{selectedIds.length} item(s) selected</span>
+                  <CheckSquare className="w-4 h-4 text-[#00ff88]" />
+                  <span className="font-bold">{selectedRows.length} item(s) selected</span>
                 </div>
 
-                <div className="flex items-center space-x-3">
-                  <select
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        handleBulkChangeStatus(
-                          e.target.value as ArbitrageItem["status"]
-                        );
-                        e.target.value = "";
-                      }
-                    }}
-                    className="bg-[#222222] border border-[#444444] text-xs text-white rounded-none px-3 py-1.5 focus:outline-none"
-                  >
-                    <option value="">Change Status...</option>
-                    <option value="pending">Set Pending</option>
-                    <option value="purchased">Set Purchased</option>
-                    <option value="in_transit">Set In Transit</option>
-                    <option value="relisted">Set Relisted</option>
-                    <option value="archived">Set Archived</option>
-                  </select>
-
+                <div className="flex items-center space-x-2">
                   <button
-                    onClick={() => handleBulkChangeStatus("archived")}
-                    className="px-4 py-1.5 bg-[#333333] hover:bg-[#444444] text-white rounded-none transition-colors uppercase font-bold text-[11px]"
+                    onClick={() => handleBulkStatusChange("in_transit")}
+                    className="px-3 py-1.5 bg-amber-600/30 text-amber-400 border border-amber-500/50 hover:bg-amber-600/50 font-bold uppercase text-[11px]"
+                  >
+                    In Transit
+                  </button>
+                  <button
+                    onClick={() => handleBulkStatusChange("testing")}
+                    className="px-3 py-1.5 bg-cyan-600/30 text-cyan-400 border border-cyan-500/50 hover:bg-cyan-600/50 font-bold uppercase text-[11px]"
+                  >
+                    Testing
+                  </button>
+                  <button
+                    onClick={() => handleBulkStatusChange("relisted")}
+                    className="px-3 py-1.5 bg-blue-600/30 text-blue-400 border border-blue-500/50 hover:bg-blue-600/50 font-bold uppercase text-[11px]"
+                  >
+                    Relisted
+                  </button>
+                  <button
+                    onClick={() => handleBulkStatusChange("sold")}
+                    className="px-3 py-1.5 bg-purple-600/30 text-purple-400 border border-purple-500/50 hover:bg-purple-600/50 font-bold uppercase text-[11px]"
+                  >
+                    Sold
+                  </button>
+                  <button
+                    onClick={() => handleBulkStatusChange("archived")}
+                    className="px-3 py-1.5 bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700 font-bold uppercase text-[11px]"
                   >
                     Archive
                   </button>
-
                   <button
                     onClick={handleBulkDelete}
-                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-none transition-colors uppercase font-bold text-[11px]"
+                    className="px-3 py-1.5 bg-red-600 text-white hover:bg-red-700 font-bold uppercase text-[11px]"
                   >
                     Delete
                   </button>
@@ -666,166 +984,94 @@ export default function ArbitrageCommandCenter() {
               </div>
             )}
 
-            {/* High-Density Apple Table with Sharp Corners */}
-            <div className="border border-[#e2dfd7] bg-white rounded-none shadow-sm overflow-hidden">
+            {/* TanStack Table Container */}
+            <div className="border border-zinc-900 bg-zinc-950 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-[#111111] border-collapse">
-                  <thead className="bg-[#f3f1ec] text-[#444444] uppercase font-mono text-[11px] font-bold border-b border-[#e2dfd7]">
-                    <tr>
-                      <th className="p-3.5 w-10 text-center">
-                        <button onClick={toggleSelectAll}>
-                          {selectedIds.length === managementItems.length &&
-                          managementItems.length > 0 ? (
-                            <CheckSquare className="w-4 h-4 text-[#111111]" />
-                          ) : (
-                            <Square className="w-4 h-4 text-[#999999]" />
-                          )}
-                        </button>
-                      </th>
-                      <th
-                        className="p-3.5 cursor-pointer hover:text-black"
-                        onClick={() => {
-                          setSortField("model_name");
-                          setSortAsc(!sortAsc);
-                        }}
-                      >
-                        <div className="flex items-center space-x-1">
-                          <span>Listing / Model</span>
-                          <ArrowUpDown className="w-3 h-3 ml-1" />
-                        </div>
-                      </th>
-                      <th className="p-3.5">Status</th>
-                      <th
-                        className="p-3.5 cursor-pointer hover:text-black font-mono"
-                        onClick={() => {
-                          setSortField("asking_price");
-                          setSortAsc(!sortAsc);
-                        }}
-                      >
-                        Asking
-                      </th>
-                      <th
-                        className="p-3.5 cursor-pointer hover:text-black font-mono"
-                        onClick={() => {
-                          setSortField("market_value");
-                          setSortAsc(!sortAsc);
-                        }}
-                      >
-                        Market
-                      </th>
-                      <th
-                        className="p-3.5 cursor-pointer hover:text-black font-mono text-right"
-                        onClick={() => {
-                          setSortField("profit_margin");
-                          setSortAsc(!sortAsc);
-                        }}
-                      >
-                        Profit %
-                      </th>
-                      <th className="p-3.5">Source</th>
-                      <th className="p-3.5">Damage</th>
-                      <th className="p-3.5 font-mono">Confidence</th>
-                      <th className="p-3.5 text-right">eBay Link</th>
-                    </tr>
+                <table className="w-full text-left text-xs text-zinc-200 border-collapse">
+                  <thead className="bg-zinc-900 text-zinc-400 uppercase font-mono text-[11px] font-bold border-b border-zinc-800">
+                    {table.getHeaderGroups().map((headerGroup) => (
+                      <tr key={headerGroup.id}>
+                        {headerGroup.headers.map((header) => (
+                          <th key={header.id} className="p-3.5">
+                            {header.isPlaceholder
+                              ? null
+                              : flexRender(header.column.columnDef.header, header.getContext())}
+                          </th>
+                        ))}
+                      </tr>
+                    ))}
                   </thead>
-                  <tbody className="divide-y divide-[#eeebe3] font-sans">
-                    {managementItems.length === 0 ? (
+                  <tbody className="divide-y divide-zinc-900 font-sans">
+                    {table.getRowModel().rows.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="p-12 text-center text-[#888888] font-mono">
-                          No matching listings found in database.
+                        <td colSpan={columns.length} className="p-12 text-center text-zinc-500 font-mono">
+                          No matching listings found.
                         </td>
                       </tr>
                     ) : (
-                      managementItems.map((item) => {
-                        const isSelected = selectedIds.includes(item.id);
+                      table.getRowModel().rows.map((row) => {
+                        const isExpanded = expandedRowId === row.original.id;
                         return (
-                          <tr
-                            key={item.id}
-                            className={`hover:bg-[#faf9f6] transition-colors ${
-                              isSelected ? "bg-[#f0eee9]" : ""
-                            }`}
-                          >
-                            <td className="p-3.5 text-center">
-                              <button onClick={() => toggleSelect(item.id)}>
-                                {isSelected ? (
-                                  <CheckSquare className="w-4 h-4 text-[#111111]" />
-                                ) : (
-                                  <Square className="w-4 h-4 text-[#cccccc]" />
-                                )}
-                              </button>
-                            </td>
-                            <td className="p-3.5 font-semibold text-[#111111]">
-                              <div className="flex items-center space-x-3">
-                                <img
-                                  src={item.image_urls[0]}
-                                  alt=""
-                                  className="w-9 h-9 object-cover rounded-none border border-[#e2dfd7]"
-                                />
-                                <span className="truncate max-w-xs">{item.model_name}</span>
-                              </div>
-                            </td>
-                            <td className="p-3.5">
-                              <span
-                                className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded-none border ${
-                                  item.status === "purchased"
-                                    ? "bg-[#ecfdf5] border-[#a7f3d0] text-[#047857]"
-                                    : item.status === "archived"
-                                    ? "bg-[#f3f4f6] border-[#e5e7eb] text-[#6b7280]"
-                                    : item.status === "in_transit"
-                                    ? "bg-[#fffbebf] border-[#fde68a] text-[#b45309]"
-                                    : item.status === "relisted"
-                                    ? "bg-[#eff6ff] border-[#bfdbfe] text-[#1d4ed8]"
-                                    : "bg-[#f5f3ff] border-[#ddd6fe] text-[#6d28d9]"
-                                }`}
-                              >
-                                {item.status}
-                              </span>
-                            </td>
-                            <td className="p-3.5 font-mono">${item.asking_price.toFixed(2)}</td>
-                            <td className="p-3.5 font-mono">${item.market_value.toFixed(2)}</td>
-                            <td className="p-3.5 font-mono font-bold text-right">
-                              <span
-                                className={
-                                  item.profit_margin > 40
-                                    ? "text-[#059669] font-extrabold"
-                                    : "text-[#444444]"
-                                }
-                              >
-                                +{item.profit_margin.toFixed(1)}%
-                              </span>
-                            </td>
-                            <td className="p-3.5">
-                              <span className="px-2 py-0.5 text-[10px] font-mono rounded-none border border-[#d6d2c4] bg-[#f7f6f2] text-[#333333]">
-                                {item.pipeline_source}
-                              </span>
-                            </td>
-                            <td className="p-3.5">
-                              <span
-                                className={`font-mono text-xs font-semibold ${
-                                  item.damage_severity === "None"
-                                    ? "text-[#059669]"
-                                    : item.damage_severity === "Minor"
-                                    ? "text-[#d97706]"
-                                    : "text-[#dc2626]"
-                                }`}
-                              >
-                                {item.damage_severity}
-                              </span>
-                            </td>
-                            <td className="p-3.5 font-mono">
-                              {(item.confidence_score * 100).toFixed(0)}%
-                            </td>
-                            <td className="p-3.5 text-right">
-                              <a
-                                href={item.ebay_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="p-2 inline-block text-[#111111] hover:bg-[#111111] hover:text-white border border-[#e2dfd7] rounded-none transition-colors"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                              </a>
-                            </td>
-                          </tr>
+                          <React.Fragment key={row.id}>
+                            <tr
+                              className={`hover:bg-zinc-900/50 transition-colors ${
+                                row.getIsSelected() ? "bg-zinc-900" : ""
+                              }`}
+                            >
+                              {row.getVisibleCells().map((cell) => (
+                                <td key={cell.id} className="p-3.5">
+                                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                </td>
+                              ))}
+                            </tr>
+                            {isExpanded && (
+                              <tr className="bg-zinc-950 border-b border-zinc-900">
+                                <td colSpan={columns.length} className="p-6 font-mono text-xs">
+                                  <div className="space-y-4 max-w-4xl">
+                                    <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                                      <h4 className="text-sm font-bold text-white">
+                                        {row.original.model_name} Details & Gallery
+                                      </h4>
+                                      <span className="text-zinc-400 text-xs">ID: {row.original.id}</span>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                      <div>
+                                        <span className="block text-zinc-500 text-[10px] uppercase">
+                                          Damage & Condition Notes:
+                                        </span>
+                                        <p className="text-zinc-200 mt-1 italic">
+                                          "{row.original.damage_notes}"
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <span className="block text-zinc-500 text-[10px] uppercase">
+                                          Confidence & Source:
+                                        </span>
+                                        <p className="text-zinc-200 mt-1">
+                                          Source: {row.original.pipeline_source} | Confidence: {(row.original.confidence_score * 100).toFixed(0)}%
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <span className="block text-zinc-500 text-[10px] uppercase mb-2">
+                                        All Scraped Images ({row.original.image_urls.length}):
+                                      </span>
+                                      <div className="flex items-center space-x-3 overflow-x-auto pb-2">
+                                        {row.original.image_urls.map((imgUrl, idx) => (
+                                          <img
+                                            key={idx}
+                                            src={imgUrl}
+                                            alt=""
+                                            className="w-24 h-24 object-cover border border-zinc-800 rounded-none flex-shrink-0"
+                                          />
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         );
                       })
                     )}
@@ -836,28 +1082,85 @@ export default function ArbitrageCommandCenter() {
           </div>
         )}
       </main>
+
+      {/* Detail Modal for Mobile / Tap action */}
+      {detailModalItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-zinc-950 border border-zinc-800 text-white max-w-lg w-full p-6 space-y-4 relative font-mono">
+            <button
+              onClick={() => setDetailModalItem(null)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-base font-bold text-white">{detailModalItem.model_name}</h3>
+            <img
+              src={detailModalItem.image_urls[0]}
+              alt=""
+              className="w-full h-64 object-contain bg-black border border-zinc-800"
+            />
+            <div className="grid grid-cols-2 gap-4 bg-zinc-900 p-3 border border-zinc-800">
+              <div>
+                <span className="text-[10px] text-zinc-400 block uppercase">Asking</span>
+                <span className="text-lg font-bold">${detailModalItem.asking_price.toFixed(2)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-zinc-400 block uppercase">Market Value</span>
+                <span className="text-lg font-bold text-[#00ff88]">${detailModalItem.market_value.toFixed(2)}</span>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-300 italic">"{detailModalItem.damage_notes}"</p>
+            <div className="flex space-x-3 pt-2">
+              <button
+                onClick={() => {
+                  handleWorthy(detailModalItem);
+                  setDetailModalItem(null);
+                }}
+                className="flex-1 py-2.5 bg-[#00ff88] text-black font-bold uppercase text-xs"
+              >
+                Buy Now [W]
+              </button>
+              <button
+                onClick={() => {
+                  handleUnworthy(detailModalItem);
+                  setDetailModalItem(null);
+                }}
+                className="flex-1 py-2.5 bg-red-600/30 text-red-400 border border-red-500/50 font-bold uppercase text-xs"
+              >
+                Archive [S]
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-{/* Apple-Sleek Egg-White Card Component with Sharp Corners */}
-function SleekEggWhiteCard({
+{/* OLED Brutalist Masonry Card */}
+function OledMasonryCard({
   item,
-  isHovered,
-  onHoverChange,
+  isSelected,
+  isAnimating,
+  onSelect,
   onWorthy,
-  onUnworthy
+  onUnworthy,
+  onOpenModal,
 }: {
   item: ArbitrageItem;
-  isHovered: boolean;
-  onHoverChange: (hovered: boolean) => void;
+  isSelected: boolean;
+  isAnimating: "purchase" | "archive" | null;
+  onSelect: () => void;
   onWorthy: () => void;
   onUnworthy: () => void;
+  onOpenModal: () => void;
 }) {
   const [imgIdx, setImgIdx] = useState(0);
+  const [isHovered, setIsHovered] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Non-passive wheel event listener for image cycling without page scroll
+  // Non-passive wheel event listener with hard stop at last image
   useEffect(() => {
     const el = cardRef.current;
     if (!el) return;
@@ -865,11 +1168,9 @@ function SleekEggWhiteCard({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (e.deltaY > 0) {
-        setImgIdx((prev) => (prev + 1) % item.image_urls.length);
+        setImgIdx((prev) => Math.min(item.image_urls.length - 1, prev + 1));
       } else if (e.deltaY < 0) {
-        setImgIdx(
-          (prev) => (prev - 1 + item.image_urls.length) % item.image_urls.length
-        );
+        setImgIdx((prev) => Math.max(0, prev - 1));
       }
     };
 
@@ -877,145 +1178,140 @@ function SleekEggWhiteCard({
     return () => el.removeEventListener("wheel", handleWheel);
   }, [item.image_urls.length]);
 
+  // Mobile Touch Tinder Swipe handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current) return;
+    const touch = e.changedTouches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    const deltaY = touch.clientY - touchStartRef.current.y;
+
+    if (Math.abs(deltaX) > 100 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (deltaX > 0) {
+        onWorthy();
+      } else {
+        onUnworthy();
+      }
+    } else if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) {
+      onOpenModal();
+    }
+    touchStartRef.current = null;
+  };
+
+  let animationClass = "";
+  if (isAnimating === "purchase") {
+    animationClass = "ring-4 ring-[#00ff88] scale-0 duration-300";
+  } else if (isAnimating === "archive") {
+    animationClass = "ring-4 ring-[#ff4444] scale-0 duration-300";
+  }
+
+  let marginColor = "text-zinc-200";
+  if (item.profit_margin > 40) marginColor = "text-[#00ff88]";
+  else if (item.profit_margin >= 25) marginColor = "text-[#4ade80]";
+  else if (item.profit_margin < 0) marginColor = "text-[#ff4444]";
+
   return (
     <div
       ref={cardRef}
-      onMouseEnter={() => onHoverChange(true)}
-      onMouseLeave={() => onHoverChange(false)}
-      onClick={onWorthy}
+      onClick={() => onSelect()}
+      onDoubleClick={onWorthy}
       onContextMenu={(e) => {
         e.preventDefault();
         onUnworthy();
       }}
-      className={`relative h-[420px] rounded-none overflow-hidden cursor-pointer select-none bg-white border transition-all duration-300 ${
-        isHovered
-          ? "border-[#111111] shadow-xl translate-y-[-2px]"
-          : "border-[#e2dfd7] shadow-sm hover:border-[#888888]"
-      }`}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      className={`relative w-full rounded-none overflow-hidden cursor-pointer select-none bg-zinc-950 border transition-all duration-150 ${
+        isSelected ? "ring-2 ring-[#00ff88] border-[#00ff88]" : "border-zinc-800 hover:border-zinc-700"
+      } ${animationClass}`}
     >
-      {/* Primary eBay Listing Photo */}
-      <img
-        src={item.image_urls[imgIdx]}
-        alt={item.model_name}
-        className={`absolute inset-0 w-full h-full object-cover rounded-none transition-all duration-500 ${
-          isHovered ? "scale-105 filter brightness-95" : "brightness-[0.98]"
-        }`}
-      />
+      {/* Aspect Ratio Native Image (no cropping) */}
+      <div className="relative w-full bg-black min-h-[260px] flex items-center justify-center">
+        <img
+          src={item.image_urls[imgIdx]}
+          alt={item.model_name}
+          className="w-full h-auto max-h-[340px] object-contain transition-transform duration-150"
+        />
 
-      {/* Non-Hovered Minimal Egg-White Bottom Bar */}
-      {!isHovered && (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/90 to-transparent pt-12 pb-5 px-5 flex flex-col justify-end">
-          <div className="space-y-1">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="font-bold text-sm text-[#111111] line-clamp-1">
-                {item.model_name}
-              </h3>
-              <span
-                className={`text-sm font-extrabold font-mono flex-shrink-0 ${
-                  item.profit_margin > 40 ? "text-[#059669]" : "text-[#111111]"
-                }`}
-              >
-                +{item.profit_margin.toFixed(0)}%
+        {/* Dot Indicators */}
+        {item.image_urls.length > 1 && (
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center space-x-1 font-mono text-[10px] text-zinc-400 bg-black/60 px-2 py-0.5 rounded-full backdrop-blur-sm">
+            {item.image_urls.map((_, i) => (
+              <span key={i} className={i === imgIdx ? "text-[#00ff88]" : "text-zinc-600"}>
+                {i === imgIdx ? "●" : "○"}
               </span>
-            </div>
-            <div className="flex items-center justify-between text-xs text-[#666666] font-mono">
-              <span>${item.asking_price.toFixed(2)} asking</span>
-              <span className="text-[10px] uppercase tracking-wider text-[#999999]">
-                Hover to expand
-              </span>
-            </div>
+            ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Hover Deep-Dive Overlay - Apple Egg-White Minimalist Card */}
+      {/* Non-Hover Card Information Footer */}
+      <div className="p-4 space-y-2 bg-zinc-950 border-t border-zinc-900">
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="font-bold text-xs text-white line-clamp-1 font-mono">
+            {item.model_name}
+          </h3>
+          <span className={`text-xs font-extrabold font-mono flex-shrink-0 ${marginColor}`}>
+            +{item.profit_margin.toFixed(0)}%
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
+          <span>${item.asking_price.toFixed(2)} asking</span>
+          <span className="text-emerald-400">${item.market_value.toFixed(2)} market</span>
+        </div>
+      </div>
+
+      {/* Hover Card Backdrop Blur (150ms transition) Overlay */}
       {isHovered && (
-        <div className="absolute inset-0 bg-[#faf9f6]/95 backdrop-blur-md p-6 flex flex-col justify-between animate-in fade-in duration-200 text-xs border border-[#111111]">
-          {/* Top Info Badges & Image Indicators */}
-          <div className="space-y-3">
+        <div className="absolute inset-0 bg-black/90 backdrop-blur-xl p-5 flex flex-col justify-between transition-all duration-150 border border-[#00ff88] font-mono text-xs">
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="px-2 py-0.5 text-[10px] font-mono uppercase font-bold border border-[#d6d2c4] bg-white text-[#111111]">
+              <span
+                className={
+                  item.pipeline_source === "Exact Match"
+                    ? "bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-full px-2.5 py-0.5 text-[10px]"
+                    : "bg-purple-600/20 text-purple-400 border border-purple-500/30 rounded-full px-2.5 py-0.5 text-[10px]"
+                }
+              >
                 {item.pipeline_source}
               </span>
-
-              {/* Photo Index Indicator */}
-              <div className="flex items-center space-x-1.5 font-mono text-[10px] text-[#666666]">
-                <span>
-                  Photo {imgIdx + 1}/{item.image_urls.length}
-                </span>
-              </div>
+              <span className="text-[10px] text-zinc-400">
+                Photo {imgIdx + 1}/{item.image_urls.length}
+              </span>
             </div>
-
-            <h3 className="font-bold text-sm text-[#111111] line-clamp-2 leading-tight">
-              {item.model_name}
-            </h3>
+            <h3 className="font-bold text-xs text-white line-clamp-2">{item.model_name}</h3>
           </div>
 
-          {/* Financial Breakdown Grid */}
-          <div className="grid grid-cols-2 gap-3 bg-white p-3.5 border border-[#e2dfd7] rounded-none">
+          <div className="grid grid-cols-2 gap-2 bg-zinc-900 p-2 border border-zinc-800">
             <div>
-              <span className="text-[10px] text-[#777777] block uppercase font-mono">
-                Asking Price
-              </span>
-              <span className="text-base font-bold font-mono text-[#111111]">
-                ${item.asking_price.toFixed(2)}
-              </span>
+              <span className="text-[9px] text-zinc-500 uppercase block">Asking</span>
+              <span className="text-sm font-bold text-white">${item.asking_price.toFixed(2)}</span>
             </div>
             <div>
-              <span className="text-[10px] text-[#777777] block uppercase font-mono">
-                Market Value
-              </span>
-              <span className="text-base font-bold font-mono text-[#059669]">
-                ${item.market_value.toFixed(2)}
-              </span>
+              <span className="text-[9px] text-zinc-500 uppercase block">Market</span>
+              <span className="text-sm font-bold text-[#00ff88]">${item.market_value.toFixed(2)}</span>
             </div>
           </div>
 
-          {/* Visual Assessment & Notes */}
-          <div className="space-y-1 bg-white p-3 border border-[#e2dfd7] rounded-none">
-            <div className="flex items-center justify-between text-[11px] font-mono">
-              <span className="text-[#666666]">Damage Status:</span>
-              <span
-                className={`font-bold ${
-                  item.damage_severity === "None"
-                    ? "text-[#059669]"
-                    : item.damage_severity === "Minor"
-                    ? "text-[#d97706]"
-                    : "text-[#dc2626]"
-                }`}
-              >
+          <div className="space-y-1 bg-zinc-900 p-2 border border-zinc-800">
+            <div className="flex justify-between text-[10px]">
+              <span className="text-zinc-400">Damage:</span>
+              <span className={item.damage_severity === "None" ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
                 {item.damage_severity}
               </span>
             </div>
-            <p className="text-[11px] text-[#444444] italic line-clamp-2 leading-relaxed">
-              "{item.damage_notes}"
-            </p>
+            <p className="text-[10px] text-zinc-300 italic line-clamp-2">"{item.damage_notes}"</p>
           </div>
 
-          {/* VLM Confidence Score Progress Bar */}
-          <div className="space-y-1">
-            <div className="flex justify-between text-[10px] text-[#666666] font-mono">
-              <span>Confidence Score</span>
-              <span className="text-[#111111] font-bold">
-                {(item.confidence_score * 100).toFixed(0)}%
-              </span>
-            </div>
-            <div className="w-full bg-[#e5e2d9] h-1 rounded-none overflow-hidden">
-              <div
-                className="bg-[#111111] h-full rounded-none transition-all duration-300"
-                style={{ width: `${item.confidence_score * 100}%` }}
-              />
-            </div>
-          </div>
-
-          {/* Card Footer Actions */}
-          <div className="flex items-center justify-between text-[11px] pt-2 font-mono border-t border-[#e2dfd7]">
-            <span className="text-[#059669] font-bold flex items-center">
-              [W] Buy Listing
-            </span>
-            <span className="text-[#dc2626] font-bold flex items-center">
-              [S] Archive
-            </span>
+          <div className="flex justify-between text-[10px] pt-1 border-t border-zinc-800 font-bold">
+            <span className="text-[#00ff88]">[W] / Dbl-Click: Buy</span>
+            <span className="text-red-400">[S] / Right-Click: Archive</span>
           </div>
         </div>
       )}

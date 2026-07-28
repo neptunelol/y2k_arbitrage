@@ -211,13 +211,46 @@ class TestMainOrchestrator(unittest.TestCase):
         self.assertTrue(mock_generic.called)
 
     @patch("main.run_scheduler")
-    def test_main_cli_once_flag(self, mock_scheduler):
-        """Verify CLI argument --once triggers run_scheduler with once=True."""
+    @patch("main.validate_environment")
+    def test_main_cli_once_flag(self, mock_validate, mock_scheduler):
+        """Verify CLI argument --once triggers validate_environment and run_scheduler with once=True."""
         test_args = ["main.py", "--once"]
         with patch.object(sys, "argv", test_args):
             main.main()
+            mock_validate.assert_called_once()
             mock_scheduler.assert_called_once_with(once=True)
+
+    @patch("main.load_dotenv")
+    def test_environment_validation_missing_env(self, mock_load_dotenv):
+        """Verify validate_environment exits with code 1 when required env vars are missing."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("sys.stderr.write") as mock_stderr:
+                with self.assertRaises(SystemExit) as cm:
+                    main.validate_environment()
+                self.assertEqual(cm.exception.code, 1)
+                self.assertTrue(mock_stderr.called)
+
+    @patch("main.run_exact_pipeline")
+    @patch("main.run_generic_pipeline")
+    def test_fastapi_scan_endpoints(self, mock_generic, mock_exact):
+        """Verify FastAPI /api/scan/fast and /api/scan/slow trigger respective pipelines."""
+        from fastapi.testclient import TestClient
+        mock_exact.return_value = {"status": "success", "search_type": "exact"}
+        mock_generic.return_value = {"status": "success", "search_type": "generic"}
+
+        client = TestClient(main.app)
+        
+        resp_fast = client.get("/api/scan/fast")
+        self.assertEqual(resp_fast.status_code, 200)
+        self.assertEqual(resp_fast.json()["status"], "success")
+        mock_exact.assert_called_once()
+
+        resp_slow = client.get("/api/scan/slow")
+        self.assertEqual(resp_slow.status_code, 200)
+        self.assertEqual(resp_slow.json()["status"], "success")
+        mock_generic.assert_called_once()
 
 
 if __name__ == "__main__":
     unittest.main()
+

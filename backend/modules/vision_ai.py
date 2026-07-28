@@ -213,6 +213,65 @@ def _identify_single_listing(
     return create_fallback_enrichment(listing, reason=f"VLM Quota Exceeded ({last_error})")
 
 
+def _identify_single_listing_anthropic(
+    listing: dict[str, Any],
+    client: Any,
+    model_name: str = "claude-3-5-sonnet-20241022",
+    max_retries: int = 2,
+) -> dict[str, Any]:
+    """Process a single listing through Anthropic VLM with top 3 image URLs."""
+    image_urls = listing.get("image_urls") or []
+    if not isinstance(image_urls, list):
+        image_urls = []
+
+    target_images = image_urls[:3]
+    title = listing.get("title", "")
+    seller_desc = listing.get("seller_description", "")
+    price = listing.get("price", 0.0)
+
+    user_text = f"Listing Title: {title}\nAsking Price: ${price}\nSeller Description: {seller_desc}"
+    content_parts: list[dict[str, Any]] = []
+
+    for img_url in target_images:
+        if isinstance(img_url, str) and (img_url.startswith("http://") or img_url.startswith("https://")):
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": img_url,
+                }
+            })
+
+    content_parts.append({"type": "text", "text": user_text})
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.messages.create(
+                model=model_name,
+                max_tokens=300,
+                system=VLM_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": content_parts}],
+            )
+            raw_text = ""
+            if hasattr(response, "content") and response.content and len(response.content) > 0:
+                raw_text = getattr(response.content[0], "text", "")
+            parsed = parse_vlm_json_response(raw_text, fallback_title=title)
+
+            return {
+                **listing,
+                "identified_model": parsed["identified_model"],
+                "confidence_score": parsed["confidence_score"],
+                "damage_severity": parsed["damage_severity"],
+                "damage_notes": parsed["damage_notes"],
+            }
+        except Exception as exc:
+            logger.warning("Anthropic VLM request failed on attempt %d for '%s': %s", attempt + 1, title[:30], exc)
+            if attempt < max_retries:
+                time.sleep(1.0)
+
+    return create_fallback_enrichment(listing, reason="Anthropic VLM processing failed")
+
+
 def identify_camera_listings(
     listings: list[dict[str, Any]] | None = None,
     api_key: str | None = None,
@@ -221,12 +280,50 @@ def identify_camera_listings(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Primary importable callable function for Vision AI identification.
-    Uses Google Gemini API for multimodal camera identification.
+    Supports Google Gemini API or Anthropic Claude API based on VLM_PROVIDER.
     Returns (filtered_for_pricer, all_enriched_for_db).
     """
     if not listings:
         logger.info("No listings provided to identify_camera_listings. Returning ([], []).")
         return ([], [])
+
+    vlm_provider = os.getenv("VLM_PROVIDER", "gemini").strip().lower()
+
+    if vlm_provider in ("claude", "anthropic"):
+        resolved_api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        if is_placeholder_credential(resolved_api_key):
+            logger.warning("ANTHROPIC_API_KEY is missing or placeholder. Returning fallback enrichment.")
+            all_enriched = [create_fallback_enrichment(item, reason="Missing or placeholder API key") for item in listings]
+            filtered_for_pricer = [item for item in all_enriched if str(item.get("damage_severity", "")).strip().lower() != "major"]
+            return (filtered_for_pricer, all_enriched)
+
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=resolved_api_key)
+        except Exception as exc:
+            logger.warning("Failed to instantiate Anthropic client: %s", exc)
+            all_enriched = [create_fallback_enrichment(item, reason=f"Client init error: {exc}") for item in listings]
+            filtered_for_pricer = [item for item in all_enriched if str(item.get("damage_severity", "")).strip().lower() != "major"]
+            return (filtered_for_pricer, all_enriched)
+
+        claude_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+        all_enriched = []
+        filtered_for_pricer = []
+
+        total = len(listings)
+        for idx, listing in enumerate(listings):
+            enriched = _identify_single_listing_anthropic(listing, client, model_name=claude_model)
+            all_enriched.append(enriched)
+
+            if str(enriched.get("damage_severity", "")).strip().lower() == "major":
+                logger.info("Filtered listing '%s' from pricer list due to major damage.", listing.get("title"))
+            else:
+                filtered_for_pricer.append(enriched)
+
+            if idx < total - 1 and throttle_seconds > 0:
+                time.sleep(throttle_seconds)
+
+        return (filtered_for_pricer, all_enriched)
 
     resolved_api_key = api_key or os.getenv("GEMINI_API_KEY")
 
@@ -263,3 +360,4 @@ def identify_camera_listings(
             time.sleep(throttle_seconds)
 
     return (filtered_for_pricer, all_enriched)
+

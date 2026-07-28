@@ -177,7 +177,7 @@ def get_estimated_market_value(
         response = requests.get(
             insights_url,
             headers=headers,
-            params={"q": clean_query, "limit": 5},
+            params={"q": clean_query, "limit": 5, "LH_Sold": "1", "LH_Complete": "1"},
             timeout=10,
         )
         if response.status_code == 200:
@@ -200,13 +200,13 @@ def get_estimated_market_value(
     except Exception as exc:
         logger.warning("Marketplace Insights API call failed for query '%s': %s", clean_query, exc)
 
-    # Tier 2: Browse API Active Comps with 0.85 multiplier
+    # Tier 2: Browse API Active Comps with 0.85 multiplier (with LH_Sold=1&LH_Complete=1)
     browse_url = f"{browse_base_url}/buy/browse/v1/item_summary/search"
     try:
         response = requests.get(
             browse_url,
             headers=headers,
-            params={"q": clean_query, "limit": 5, "filter": "conditions:{USED}"},
+            params={"q": clean_query, "limit": 5, "filter": "conditions:{USED}", "LH_Sold": "1", "LH_Complete": "1"},
             timeout=10,
         )
         if response.status_code != 200:
@@ -214,7 +214,7 @@ def get_estimated_market_value(
             response = requests.get(
                 browse_url,
                 headers=headers,
-                params={"q": clean_query, "limit": 5},
+                params={"q": clean_query, "limit": 5, "LH_Sold": "1", "LH_Complete": "1"},
                 timeout=10,
             )
 

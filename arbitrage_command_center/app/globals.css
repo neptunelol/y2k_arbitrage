@@ -4,8 +4,8 @@
 
 @layer base {
   body {
-    background-color: #faf9f6;
-    color: #111111;
+    background-color: #000000;
+    color: #ffffff;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
