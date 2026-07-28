@@ -22,7 +22,9 @@ import {
   Database,
   RefreshCw,
   SlidersHorizontal,
-  ChevronRight
+  CopyX,
+  Layers,
+  Check
 } from "lucide-react";
 
 export interface ArbitrageItem {
@@ -78,6 +80,22 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
     ebay_url: "https://www.ebay.com/itm/137515968082"
   },
   {
+    id: "arb-102-dup", // Duplicate testing item
+    model_name: "Sony Cyber-shot DSC-T10 CCD",
+    asking_price: 35.0,
+    market_value: 145.0,
+    profit_margin: 75.8,
+    pipeline_source: "Generic VLM",
+    damage_severity: "Minor",
+    damage_notes: "Minor cosmetic scratches on slider cover.",
+    confidence_score: 0.88,
+    image_urls: [
+      "https://i.ebayimg.com/images/g/ZdgAAeSw-DtqV7Mv/s-l500.jpg"
+    ],
+    status: "pending",
+    ebay_url: "https://www.ebay.com/itm/137515968082?_skw=duplicate"
+  },
+  {
     id: "arb-103",
     model_name: "Nikon Coolpix S210 Silver",
     asking_price: 55.0,
@@ -113,6 +131,34 @@ const FALLBACK_DUMMY_DATA: ArbitrageItem[] = [
   }
 ];
 
+// Smart Deduplication Algorithm based on canonical eBay URLs and Model/Price keys
+const deduplicateListings = (
+  itemsList: ArbitrageItem[]
+): { unique: ArbitrageItem[]; removedCount: number } => {
+  const seenUrls = new Set<string>();
+  const seenModelPrices = new Set<string>();
+  const unique: ArbitrageItem[] = [];
+
+  itemsList.forEach((item) => {
+    // Strip URL tracking parameters (e.g. ?_skw=...) to isolate unique eBay item ID
+    const canonicalUrl = item.ebay_url ? item.ebay_url.split("?")[0].toLowerCase().trim() : item.id;
+    const modelPriceKey = `${item.model_name.toLowerCase().trim()}_${item.asking_price}`;
+
+    if (seenUrls.has(canonicalUrl) || seenModelPrices.has(modelPriceKey)) {
+      return; // Skip duplicate listing
+    }
+
+    seenUrls.add(canonicalUrl);
+    seenModelPrices.add(modelPriceKey);
+    unique.push(item);
+  });
+
+  return {
+    unique,
+    removedCount: itemsList.length - unique.length
+  };
+};
+
 export default function ArbitrageCommandCenter() {
   const [mounted, setMounted] = useState<boolean>(false);
   const [items, setItems] = useState<ArbitrageItem[]>(FALLBACK_DUMMY_DATA);
@@ -120,6 +166,7 @@ export default function ArbitrageCommandCenter() {
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(false);
   const [mode, setMode] = useState<"triage" | "management">("triage");
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  const [notification, setNotification] = useState<string | null>(null);
 
   // Management mode filters & sorting
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -133,7 +180,21 @@ export default function ArbitrageCommandCenter() {
     setMounted(true);
   }, []);
 
-  // Fetch real eBay listings photos & details from Supabase
+  // Deduplication action handler
+  const handleDeduplicate = useCallback(() => {
+    setItems((prev) => {
+      const { unique, removedCount } = deduplicateListings(prev);
+      if (removedCount > 0) {
+        setNotification(`Deduplication Complete: Removed ${removedCount} duplicate listing(s).`);
+      } else {
+        setNotification("Feed Clean: No duplicate listings found.");
+      }
+      setTimeout(() => setNotification(null), 4000);
+      return unique;
+    });
+  }, []);
+
+  // Fetch real eBay listings photos & details from Supabase with auto-deduplication
   const fetchSupabaseListings = useCallback(async () => {
     setLoading(true);
     try {
@@ -145,6 +206,8 @@ export default function ArbitrageCommandCenter() {
       if (error) {
         console.warn("Supabase fetch error, using fallback dataset:", error.message);
         setIsSupabaseConnected(false);
+        const { unique } = deduplicateListings(FALLBACK_DUMMY_DATA);
+        setItems(unique);
       } else if (data && data.length > 0) {
         setIsSupabaseConnected(true);
         const mappedItems: ArbitrageItem[] = data.map((row: any) => {
@@ -186,7 +249,14 @@ export default function ArbitrageCommandCenter() {
             ebay_url: row.listing_url || "https://www.ebay.com"
           };
         });
-        setItems(mappedItems);
+
+        // Automatically deduplicate listings on initial fetch
+        const { unique, removedCount } = deduplicateListings(mappedItems);
+        setItems(unique);
+        if (removedCount > 0) {
+          setNotification(`Auto-Deduplication: Filtered out ${removedCount} duplicate listing(s).`);
+          setTimeout(() => setNotification(null), 4000);
+        }
       } else {
         setIsSupabaseConnected(false);
       }
@@ -349,6 +419,14 @@ export default function ArbitrageCommandCenter() {
       suppressHydrationWarning
       className="min-h-screen bg-[#faf9f6] text-[#111111] font-sans antialiased selection:bg-[#111111] selection:text-white"
     >
+      {/* Toast Notification Banner */}
+      {notification && (
+        <div className="fixed bottom-6 right-6 z-50 bg-[#111111] text-white px-5 py-3 border border-[#333333] shadow-2xl rounded-none font-mono text-xs flex items-center space-x-3 animate-in slide-in-from-bottom-3 duration-200">
+          <Sparkles className="w-4 h-4 text-emerald-400" />
+          <span>{notification}</span>
+        </div>
+      )}
+
       {/* Apple-Sleek Egg-White Header with Sharp Corners */}
       <header className="sticky top-0 z-40 bg-[#faf9f6]/90 border-b border-[#e5e2d9] shadow-sm backdrop-blur-md px-8 py-5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
@@ -385,8 +463,18 @@ export default function ArbitrageCommandCenter() {
             </div>
           </div>
 
-          {/* Mode Switcher - Sharp Egg-White / Obsidian Contrast */}
+          {/* Action Controls & Mode Switcher */}
           <div className="flex items-center space-x-3">
+            {/* Deduplicate Button */}
+            <button
+              onClick={handleDeduplicate}
+              title="Remove duplicate eBay listings"
+              className="flex items-center px-3.5 py-2.5 border border-[#e2dfd7] bg-white hover:bg-[#f0eee9] text-[#111111] font-mono text-xs font-bold uppercase tracking-wider rounded-none transition-colors"
+            >
+              <CopyX className="w-4 h-4 mr-2 text-[#059669]" />
+              Deduplicate
+            </button>
+
             <button
               onClick={fetchSupabaseListings}
               title="Refresh Supabase eBay listings"
@@ -454,7 +542,7 @@ export default function ArbitrageCommandCenter() {
                 </span>
               </div>
               <span className="text-[#888888] text-[11px] mt-2 md:mt-0">
-                Zero-Friction Auto-Advance Active
+                Auto-Deduplication Active
               </span>
             </div>
 
@@ -489,7 +577,7 @@ export default function ArbitrageCommandCenter() {
         ) : (
           /* Management View: Egg-White Sharp Data Table */
           <div className="space-y-6">
-            {/* Filter Bar */}
+            {/* Filter & Deduplicate Bar */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white p-5 border border-[#e2dfd7] rounded-none shadow-sm">
               <div className="flex items-center space-x-4 w-full sm:w-auto font-mono text-xs">
                 <div className="flex items-center text-[#111111] font-bold uppercase">
@@ -520,8 +608,16 @@ export default function ArbitrageCommandCenter() {
                 </select>
               </div>
 
-              <div className="text-xs text-[#666666] font-mono">
-                Showing {managementItems.length} of {items.length} records
+              <div className="flex items-center space-x-4 font-mono text-xs">
+                <button
+                  onClick={handleDeduplicate}
+                  className="flex items-center text-[#059669] hover:underline font-bold"
+                >
+                  <CopyX className="w-3.5 h-3.5 mr-1" /> Remove Duplicates
+                </button>
+                <span className="text-[#666666]">
+                  Showing {managementItems.length} of {items.length} records
+                </span>
               </div>
             </div>
 
