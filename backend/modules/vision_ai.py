@@ -36,7 +36,7 @@ You MUST respond strictly with a valid JSON object matching this structure:
   "confidence_score": <float 0.0 to 1.0>
 }"""
 
-FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
+FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-flash-lite-latest"]
 
 
 def is_placeholder_credential(val: str | None) -> bool:
@@ -133,7 +133,7 @@ def parse_vlm_json_response(raw_response_text: str, fallback_title: str = "Unkno
 def _identify_single_listing(
     listing: dict[str, Any],
     client: Any,
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-3.6-flash",
     max_retries: int = 2,
 ) -> dict[str, Any]:
     """Process a single listing through Gemini VLM with rate-limit retries and model fallbacks."""
@@ -275,7 +275,7 @@ def _identify_single_listing_anthropic(
 def identify_camera_listings(
     listings: list[dict[str, Any]] | None = None,
     api_key: str | None = None,
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-3.6-flash",
     throttle_seconds: float = 1.0,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
