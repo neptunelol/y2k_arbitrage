@@ -286,22 +286,26 @@ export default function ArbitrageCommandCenter() {
   // Handle on-demand Fast-Track & Slow-Track scanning
   const handleTriggerScan = async (type: "fast" | "slow") => {
     setIsScanning(true);
-    setScanType(type === "fast" ? "Fast-Track (10m)" : "Slow-Track (60m)");
-    setNotification(`Triggering ${type === "fast" ? "Fast-Track" : "Slow-Track"} Scan...`);
+    const scanLabel = type === "fast" ? "Fast-Track" : "Slow-Track";
+    setScanType(scanLabel);
+    setNotification(`Initiating ${scanLabel} Scan...`);
     try {
       const res = await fetch(`${backendApiUrl}/api/scan/${type}`, { method: "POST" });
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
       const json = await res.json();
-      setNotification(`Scan complete: ${json.search_type || type} scan finished.`);
+      setNotification(`Scan dispatched: ${json.message || `${scanLabel} scan initiated.`}`);
       setLastScanTime(new Date().toLocaleTimeString());
-      fetchSupabaseListings();
+      setTimeout(() => fetchSupabaseListings(), 3000);
     } catch (err) {
-      console.error("Scan trigger error:", err);
-      setNotification(`Scan initiated locally (${type} scan).`);
+      console.warn(`[API NOTICE] Backend service at ${backendApiUrl} unavailable:`, err);
+      setNotification(`Backend API offline. Ensure backend is running via 'cd backend && python main.py'`);
       setLastScanTime(new Date().toLocaleTimeString());
     } finally {
       setIsScanning(false);
       setScanType(null);
-      setTimeout(() => setNotification(null), 4000);
+      setTimeout(() => setNotification(null), 5000);
     }
   };
 

@@ -162,20 +162,28 @@ def health_check():
     return {"status": "ok", "service": "Y2K Arbitrage Bot API"}
 
 
-@app.api_route("/api/scan/fast", methods=["GET", "POST"])
+@app.api_route("/api/scan/fast", methods=["GET", "POST", "OPTIONS"])
 async def scan_fast(background_tasks: BackgroundTasks):
-    """Trigger Fast-Track scan (Exact match pipeline) on demand."""
+    """Trigger Fast-Track scan (Exact match pipeline) on demand in background."""
     logger.info("[FASTAPI] Fast-Track scan triggered via API.")
-    summary = run_exact_pipeline()
-    return {"status": "success", "search_type": "exact", "summary": summary}
+    background_tasks.add_task(run_exact_pipeline)
+    return {
+        "status": "success",
+        "search_type": "exact",
+        "message": "Fast-Track scan initiated in background."
+    }
 
 
-@app.api_route("/api/scan/slow", methods=["GET", "POST"])
+@app.api_route("/api/scan/slow", methods=["GET", "POST", "OPTIONS"])
 async def scan_slow(background_tasks: BackgroundTasks):
-    """Trigger Slow-Track scan (Generic VLM pipeline) on demand."""
+    """Trigger Slow-Track scan (Generic VLM pipeline) on demand in background."""
     logger.info("[FASTAPI] Slow-Track scan triggered via API.")
-    summary = run_generic_pipeline()
-    return {"status": "success", "search_type": "generic", "summary": summary}
+    background_tasks.add_task(run_generic_pipeline)
+    return {
+        "status": "success",
+        "search_type": "generic",
+        "message": "Slow-Track scan initiated in background."
+    }
 
 
 def run_generic_pipeline() -> dict[str, Any]:
