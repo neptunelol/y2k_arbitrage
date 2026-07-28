@@ -159,7 +159,7 @@ export default function ArbitrageCommandCenter() {
   const [items, setItems] = useState<ArbitrageItem[]>(FALLBACK_DUMMY_DATA);
   const [loading, setLoading] = useState<boolean>(true);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(false);
-  const [mode, setMode] = useState<"triage" | "management">("triage");
+  const [mode, setMode] = useState<"triage" | "wanted" | "management">("triage");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [animatingCardId, setAnimatingCardId] = useState<{ id: string; action: "purchase" | "archive" } | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
@@ -361,35 +361,62 @@ export default function ArbitrageCommandCenter() {
     });
   }, [mounted, items]);
 
+  const pendingItems = useMemo(
+    () => items.filter((i) => i.status === "pending"),
+    [items]
+  );
+
+  const wantedItems = useMemo(
+    () => items.filter((i) => i.status === "purchased"),
+    [items]
+  );
+
   const handleWorthy = useCallback((item: ArbitrageItem) => {
     setAnimatingCardId({ id: item.id, action: "purchase" });
     if (typeof window !== "undefined") {
       window.open(item.ebay_url, "_blank", "noopener,noreferrer");
     }
+    setNotification(`Saved "${item.model_name}" to "I Want It" list & opening eBay...`);
+    setTimeout(() => setNotification(null), 3500);
+
+    // Auto-advance selection to adjacent card in pendingItems
+    setItems((prev) => {
+      const pendingList = prev.filter((i) => i.status === "pending");
+      const currentIdx = pendingList.findIndex((i) => i.id === item.id);
+      const remaining = pendingList.filter((i) => i.id !== item.id);
+      const nextItem = remaining[currentIdx] || remaining[currentIdx - 1] || null;
+      setSelectedCardId(nextItem ? nextItem.id : null);
+
+      return prev.map((i) => (i.id === item.id ? { ...i, status: "purchased" } : i));
+    });
+
     setTimeout(() => {
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: "purchased" } : i))
-      );
       setAnimatingCardId(null);
     }, 300);
   }, []);
 
   const handleUnworthy = useCallback((item: ArbitrageItem) => {
     setAnimatingCardId({ id: item.id, action: "archive" });
+    setNotification(`Archived "${item.model_name}".`);
+    setTimeout(() => setNotification(null), 3500);
+
+    // Auto-advance selection to adjacent card in pendingItems
+    setItems((prev) => {
+      const pendingList = prev.filter((i) => i.status === "pending");
+      const currentIdx = pendingList.findIndex((i) => i.id === item.id);
+      const remaining = pendingList.filter((i) => i.id !== item.id);
+      const nextItem = remaining[currentIdx] || remaining[currentIdx - 1] || null;
+      setSelectedCardId(nextItem ? nextItem.id : null);
+
+      return prev.map((i) => (i.id === item.id ? { ...i, status: "archived" } : i));
+    });
+
     setTimeout(() => {
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: "archived" } : i))
-      );
       setAnimatingCardId(null);
     }, 300);
   }, []);
 
-  const pendingItems = useMemo(
-    () => items.filter((i) => i.status === "pending"),
-    [items]
-  );
-
-  // Global Keyboard Shortcuts (Tab / 1 / 2 for mode, ? for cheat sheet, W / S for card actions)
+  // Global Keyboard Shortcuts (Tab / 1 / 2 / 3 for mode, ? for cheat sheet, W / S / Arrows for card actions)
   useEffect(() => {
     if (!mounted) return;
 
@@ -402,7 +429,7 @@ export default function ArbitrageCommandCenter() {
 
       if (e.key === "Tab") {
         e.preventDefault();
-        setMode((prev) => (prev === "triage" ? "management" : "triage"));
+        setMode((prev) => (prev === "triage" ? "wanted" : prev === "wanted" ? "management" : "triage"));
         return;
       }
       if (e.key === "1") {
@@ -410,11 +437,35 @@ export default function ArbitrageCommandCenter() {
         return;
       }
       if (e.key === "2") {
+        setMode("wanted");
+        return;
+      }
+      if (e.key === "3") {
         setMode("management");
         return;
       }
 
       if (mode === "triage") {
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+          e.preventDefault();
+          const currentIdx = pendingItems.findIndex((i) => i.id === selectedCardId);
+          const nextIdx = currentIdx < pendingItems.length - 1 ? currentIdx + 1 : 0;
+          if (pendingItems[nextIdx]) {
+            setSelectedCardId(pendingItems[nextIdx].id);
+          }
+          return;
+        }
+
+        if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const currentIdx = pendingItems.findIndex((i) => i.id === selectedCardId);
+          const prevIdx = currentIdx > 0 ? currentIdx - 1 : pendingItems.length - 1;
+          if (pendingItems[prevIdx]) {
+            setSelectedCardId(pendingItems[prevIdx].id);
+          }
+          return;
+        }
+
         const targetId = selectedCardId || pendingItems[0]?.id;
         const activeItem = items.find((i) => i.id === targetId && i.status === "pending");
         if (!activeItem) return;
@@ -851,25 +902,36 @@ export default function ArbitrageCommandCenter() {
             <div className="flex items-center bg-zinc-950 p-1 border border-zinc-800">
               <button
                 onClick={() => setMode("triage")}
-                className={`flex items-center px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
+                className={`flex items-center px-3.5 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
                   mode === "triage"
                     ? "bg-[#00ff88] text-black shadow-sm"
                     : "text-zinc-400 hover:text-white"
                 }`}
               >
                 <Grid className="w-3.5 h-3.5 mr-1.5" />
-                Triage (1)
+                Triage ({pendingItems.length}) (1)
+              </button>
+              <button
+                onClick={() => setMode("wanted")}
+                className={`flex items-center px-3.5 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
+                  mode === "wanted"
+                    ? "bg-[#00ff88] text-black shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 mr-1.5 text-[#00ff88]" />
+                I Want It List ({wantedItems.length}) (2)
               </button>
               <button
                 onClick={() => setMode("management")}
-                className={`flex items-center px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
+                className={`flex items-center px-3.5 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
                   mode === "management"
                     ? "bg-[#00ff88] text-black shadow-sm"
                     : "text-zinc-400 hover:text-white"
                 }`}
               >
                 <Table className="w-3.5 h-3.5 mr-1.5" />
-                Management ({items.length}) (2)
+                Management ({items.length}) (3)
               </button>
             </div>
           </div>
@@ -914,7 +976,7 @@ export default function ArbitrageCommandCenter() {
                   All Pending Listings Triaged!
                 </h3>
                 <p className="text-xs text-zinc-400 mt-1 font-mono">
-                  No active pending deals. Trigger a Fast/Slow Scan or switch to Management Mode.
+                  No active pending deals. Check your "I Want It" list, trigger a Fast/Slow Scan, or switch to Management Mode.
                 </p>
               </div>
             ) : (
@@ -927,6 +989,44 @@ export default function ArbitrageCommandCenter() {
                     isAnimating={animatingCardId?.id === item.id ? animatingCardId.action : null}
                     onSelect={() => setSelectedCardId(item.id)}
                     onWorthy={() => handleWorthy(item)}
+                    onUnworthy={() => handleUnworthy(item)}
+                    onOpenModal={() => setDetailModalItem(item)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : mode === "wanted" ? (
+          <div>
+            <div className="flex items-center justify-between mb-4 border-b border-zinc-900 pb-3 font-mono">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-[#00ff88] flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#00ff88]" />
+                I Want It List — Saved Camera Deals ({wantedItems.length})
+              </h2>
+              <span className="text-xs text-zinc-400">
+                Double-click or press W in Triage mode adds items here.
+              </span>
+            </div>
+            {wantedItems.length === 0 ? (
+              <div className="text-center py-28 border border-zinc-900 bg-zinc-950">
+                <Sparkles className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
+                <h3 className="text-base font-bold uppercase tracking-wider text-white font-mono">
+                  No Saved Deals Yet!
+                </h3>
+                <p className="text-xs text-zinc-400 mt-1 font-mono">
+                  Double-click or press W on any camera card in Triage mode to add it to your "I Want It" list.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 items-start">
+                {wantedItems.map((item) => (
+                  <OledMasonryCard
+                    key={item.id}
+                    item={item}
+                    isSelected={selectedCardId === item.id}
+                    isAnimating={animatingCardId?.id === item.id ? animatingCardId.action : null}
+                    onSelect={() => setSelectedCardId(item.id)}
+                    onWorthy={() => window.open(item.ebay_url, "_blank")}
                     onUnworthy={() => handleUnworthy(item)}
                     onOpenModal={() => setDetailModalItem(item)}
                   />
