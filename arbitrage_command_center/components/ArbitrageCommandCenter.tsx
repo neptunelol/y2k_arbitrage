@@ -309,6 +309,26 @@ export default function ArbitrageCommandCenter() {
     }
   };
 
+  // Handle purging database records to restart fresh VLM scan
+  const handlePurgeListings = async () => {
+    if (!window.confirm("Are you sure you want to purge all listings to restart with fresh VLM scans?")) {
+      return;
+    }
+    setNotification("Purging database records...");
+    try {
+      const res = await fetch(`${backendApiUrl}/api/listings/clear`, { method: "POST" });
+      const json = await res.json();
+      setNotification(`Database Cleared: Removed ${json.deleted_count || 0} listing(s).`);
+      setItems([]);
+    } catch (err) {
+      console.warn("Purge error:", err);
+      setItems([]);
+      setNotification("Feed cleared locally.");
+    } finally {
+      setTimeout(() => setNotification(null), 4000);
+    }
+  };
+
   // Pre-fetching eBay URLs and images on client
   useEffect(() => {
     if (!mounted || typeof window === "undefined") return;
@@ -798,6 +818,16 @@ export default function ArbitrageCommandCenter() {
             >
               <Activity className="w-3.5 h-3.5 mr-1.5 text-purple-400" />
               Slow Scan (60m)
+            </button>
+
+            <button
+              onClick={handlePurgeListings}
+              disabled={isScanning}
+              className="flex items-center px-3 py-2 bg-red-950/30 border border-red-800/50 hover:bg-red-900/40 text-red-400 font-mono text-xs font-bold uppercase tracking-wider transition-colors"
+              title="Purge all listings and restart fresh VLM scan feed"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1.5 text-red-400" />
+              Reset Feed
             </button>
 
             <button

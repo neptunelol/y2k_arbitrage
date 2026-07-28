@@ -20,7 +20,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 os.makedirs(os.path.join(SCRIPT_DIR, "logs"), exist_ok=True)
 
-from modules.database import check_existing_urls, save_listings
+from modules.database import check_existing_urls, save_listings, clear_all_listings
 from modules.pricer import price_camera_listings
 from modules.scraper import EXACT_SEARCH_QUERIES, GENERIC_SEARCH_QUERIES, scrape_ebay_listings
 from modules.vision_ai import identify_camera_listings
@@ -183,6 +183,18 @@ async def scan_slow(background_tasks: BackgroundTasks):
         "status": "success",
         "search_type": "generic",
         "message": "Slow-Track scan initiated in background."
+    }
+
+
+@app.api_route("/api/listings/clear", methods=["GET", "POST", "DELETE", "OPTIONS"])
+def clear_listings():
+    """Clear all listings from Supabase database."""
+    logger.info("[FASTAPI] Clear listings table requested via API.")
+    deleted_count = clear_all_listings()
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "message": f"Successfully cleared {deleted_count} listings from Supabase."
     }
 
 

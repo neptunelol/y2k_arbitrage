@@ -65,6 +65,24 @@ def get_supabase_client() -> Client | None:
         return None
 
 
+def clear_all_listings(client: Client | None = None) -> int:
+    """Delete all records from the listings table in Supabase."""
+    if client is None:
+        client = get_supabase_client()
+    if client is None:
+        logger.warning("Cannot clear listings: Supabase client unavailable.")
+        return 0
+
+    try:
+        res = client.table("listings").delete().neq("listing_url", "__DUMMY_URL__").execute()
+        count = len(res.data) if res and hasattr(res, "data") and res.data else 0
+        logger.info("Cleared %d listings from Supabase table.", count)
+        return count
+    except Exception as e:
+        logger.error("Failed to clear listings table: %s", e)
+        return 0
+
+
 def format_listing_for_db(listing: dict[str, Any]) -> dict[str, Any]:
     """Format and normalize a listing dictionary for Supabase database table insertion."""
     raw_url = listing.get("listing_url") if listing.get("listing_url") is not None else listing.get("url")
