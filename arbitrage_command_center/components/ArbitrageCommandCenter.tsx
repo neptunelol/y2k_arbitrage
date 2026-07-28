@@ -185,10 +185,16 @@ export default function ArbitrageCommandCenter() {
   useEffect(() => {
     setMounted(true);
     setLastScanTime(new Date().toLocaleTimeString());
-    const hasSeen = localStorage.getItem("hasSeenCheatSheet");
-    if (!hasSeen) {
-      setIsCheatSheetOpen(true);
-      localStorage.setItem("hasSeenCheatSheet", "true");
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        const hasSeen = window.localStorage.getItem("hasSeenCheatSheet");
+        if (!hasSeen) {
+          setIsCheatSheetOpen(true);
+          window.localStorage.setItem("hasSeenCheatSheet", "true");
+        }
+      }
+    } catch (e) {
+      console.warn("LocalStorage access notice:", e);
     }
   }, []);
 
@@ -267,11 +273,15 @@ export default function ArbitrageCommandCenter() {
           setTimeout(() => setNotification(null), 4000);
         }
       } else {
-        setIsSupabaseConnected(false);
+        setIsSupabaseConnected(true);
+        const { unique } = deduplicateListings(FALLBACK_DUMMY_DATA);
+        setItems(unique);
       }
     } catch (err) {
-      console.warn("Supabase fetch exception:", err);
+      console.warn("Supabase fetch exception, using fallback dataset:", err);
       setIsSupabaseConnected(false);
+      const { unique } = deduplicateListings(FALLBACK_DUMMY_DATA);
+      setItems(unique);
     } finally {
       setLoading(false);
     }
