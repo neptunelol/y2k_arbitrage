@@ -342,22 +342,22 @@ def identify_camera_listings(
         filtered_for_pricer = [item for item in all_enriched if str(item.get("damage_severity", "")).strip().lower() != "major"]
         return (filtered_for_pricer, all_enriched)
 
-    all_enriched = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    max_workers = min(5, max(1, len(listings)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_identify_single_listing, listing, client, model_name=model_name)
+            for listing in listings
+        ]
+        all_enriched = [f.result() for f in futures]
+
     filtered_for_pricer = []
-
-    total = len(listings)
-    for idx, listing in enumerate(listings):
-        enriched = _identify_single_listing(listing, client, model_name=model_name)
-        all_enriched.append(enriched)
-
-        if str(enriched.get("damage_severity", "")).strip().lower() == "major":
-            logger.info("Filtered listing '%s' from pricer list due to major damage.", listing.get("title"))
+    for item in all_enriched:
+        if str(item.get("damage_severity", "")).strip().lower() == "major":
+            logger.info("Filtered listing '%s' from pricer list due to major damage.", item.get("title"))
         else:
-            filtered_for_pricer.append(enriched)
-
-        # Small throttle delay between items to respect Gemini RPM (Requests Per Minute) limits
-        if idx < total - 1 and throttle_seconds > 0:
-            time.sleep(throttle_seconds)
+            filtered_for_pricer.append(item)
 
     return (filtered_for_pricer, all_enriched)
 

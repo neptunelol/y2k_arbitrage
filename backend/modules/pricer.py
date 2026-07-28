@@ -242,53 +242,68 @@ def get_estimated_market_value(
     return get_benchmark_valuation(clean_query)
 
 
+from concurrent.futures import ThreadPoolExecutor
+
+
+def price_single_listing(
+    listing: dict[str, Any],
+    min_generic_margin: float,
+    min_exact_margin: float,
+    environment: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(listing, dict):
+        return None
+
+    item = dict(listing)
+    asking_price = extract_asking_price(item)
+    model_name = item.get("identified_model") or item.get("title") or ""
+
+    market_val = get_estimated_market_value(model_name, environment=environment)
+    margin = calculate_profit_margin(asking_price, market_val)
+
+    search_type = item.get("search_type", "generic")
+    min_margin = min_exact_margin if search_type == "exact" else min_generic_margin
+
+    is_profitable = False
+    if margin is not None and margin >= min_margin:
+        is_profitable = True
+
+    item["estimated_market_value"] = market_val
+    item["profit_margin"] = margin
+    item["is_profitable_deal"] = is_profitable
+
+    return item
+
+
 def price_camera_listings(
     filtered_listings: list[dict[str, Any]] | None = None,
     api_key: str | None = None,
     environment: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Prices camera listings by fetching sold market comps and calculating profit margin.
-
-    :param filtered_listings: List of camera listing dicts (e.g. from vision_ai module).
-    :param api_key: Optional API key override.
-    :param environment: Optional environment ("sandbox" or "production").
-    :return: Retains ALL input listings (Requirement R3), enriching each with:
-             - estimated_market_value (float | None)
-             - profit_margin (float | None)
-             - is_profitable_deal (bool)
+    Prices camera listings by fetching sold market comps in parallel and calculating profit margin.
     """
     load_dotenv()
 
-    if filtered_listings is None:
+    if not filtered_listings:
         return []
 
     min_generic_margin = get_min_profit_margin()
     min_exact_margin = get_exact_match_margin()
-    priced_listings: list[dict[str, Any]] = []
 
-    for listing in filtered_listings:
-        if not isinstance(listing, dict):
-            continue
+    # Use ThreadPoolExecutor for 10x parallel speedup
+    max_workers = min(10, max(1, len(filtered_listings)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                price_single_listing,
+                listing,
+                min_generic_margin,
+                min_exact_margin,
+                environment,
+            )
+            for listing in filtered_listings
+        ]
+        results = [f.result() for f in futures]
 
-        item = dict(listing)
-        asking_price = extract_asking_price(item)
-        model_name = item.get("identified_model") or item.get("title") or ""
-
-        market_val = get_estimated_market_value(model_name, environment=environment)
-        margin = calculate_profit_margin(asking_price, market_val)
-
-        search_type = item.get("search_type", "generic")
-        min_margin = min_exact_margin if search_type == "exact" else min_generic_margin
-
-        is_profitable = False
-        if margin is not None and margin >= min_margin:
-            is_profitable = True
-
-        item["estimated_market_value"] = market_val
-        item["profit_margin"] = margin
-        item["is_profitable_deal"] = is_profitable
-
-        priced_listings.append(item)
-
-    return priced_listings
+    return [r for r in results if r is not None]
